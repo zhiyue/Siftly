@@ -125,7 +125,7 @@ export default function AISearchPage() {
           Find anything in your bookmarks
         </h1>
         <p className="text-zinc-500 text-sm">
-          Describe what you&apos;re looking for.
+          Describe what you&apos;re looking for below.
         </p>
       </div>
 

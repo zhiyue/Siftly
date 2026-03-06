@@ -584,7 +584,7 @@ function AboutSection() {
             <span className="text-xs font-semibold text-amber-300">Support development</span>
           </div>
           <p className="text-[11px] text-zinc-500 mb-2.5 leading-relaxed">
-            If Siftly saves you time, a crypto tip is always appreciated ☕
+            If Siftly saves you time, consider leaving a tip ☕
           </p>
           <button
             onClick={copyAddress}

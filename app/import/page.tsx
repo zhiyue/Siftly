@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import Link from 'next/link'
-import { Upload, CheckCircle, ChevronRight, Loader2, Copy, Check, ExternalLink, Sparkles } from 'lucide-react'
+import { Upload, CheckCircle, ChevronRight, Loader2, Copy, Check, ExternalLink, Sparkles, Eye, Tag, Brain, Layers, StopCircle } from 'lucide-react'
 import * as Progress from '@radix-ui/react-progress'
 
 type Step = 1 | 2 | 3
@@ -14,12 +14,51 @@ interface ImportResult {
   total: number
 }
 
+type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | null
+
+interface StageCounts {
+  visionTagged: number
+  entitiesExtracted: number
+  enriched: number
+  categorized: number
+}
+
 interface CategorizeStatus {
-  status: string
-  stage: string | null
+  status: 'idle' | 'running' | 'stopping'
+  stage: Stage
   done: number
   total: number
+  stageCounts: StageCounts
   lastError: string | null
+  error: string | null
+}
+
+const STAGE_INFO: Record<NonNullable<Stage>, { label: string; icon: React.ReactNode; desc: string }> = {
+  vision: {
+    label: 'Analyzing images',
+    icon: <Eye size={14} />,
+    desc: 'Extracting text, objects, and context from photos, GIFs, and videos',
+  },
+  entities: {
+    label: 'Extracting entities',
+    icon: <Tag size={14} />,
+    desc: 'Mining hashtags, URLs, and tool mentions from tweet data',
+  },
+  enrichment: {
+    label: 'Generating semantic tags',
+    icon: <Brain size={14} />,
+    desc: 'Creating 30-50 searchable tags per bookmark for AI search',
+  },
+  categorize: {
+    label: 'Categorizing',
+    icon: <Layers size={14} />,
+    desc: 'Assigning each bookmark to the most relevant categories',
+  },
+  parallel: {
+    label: 'Processing all stages in parallel',
+    icon: <Sparkles size={14} />,
+    desc: 'Vision, enrichment, and categorization running concurrently across 20 workers',
+  },
 }
 
 // ── Bookmarklet script (captures Twitter/X bookmark API responses as you scroll) ──
@@ -682,22 +721,22 @@ function ImportingStep({ result }: {
 function CategorizeStep() {
   const [status, setStatus] = useState<CategorizeStatus | null>(null)
   const [running, setRunning] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [done, setDone] = useState(false)
   const [error, setError] = useState('')
 
-  // On mount: check if pipeline is already running (started by import route),
-  // then either attach to it or start it if it hasn't begun yet.
+  // On mount: check if pipeline is already running, attach or start it.
   useEffect(() => {
     void (async () => {
       try {
         const res = await fetch('/api/categorize')
         const data = await res.json() as CategorizeStatus
         if (data.status === 'running' || data.status === 'stopping') {
-          // Pipeline already started by the import route — just attach and poll
+          setStatus(data)
           setRunning(true)
-          pollStatus(true)
+          setStopping(data.status === 'stopping')
+          pollStatus()
         } else {
-          // Pipeline not running yet — start it
           void startCategorization()
         }
       } catch {
@@ -707,10 +746,18 @@ function CategorizeStep() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  async function stopCategorization() {
+    setStopping(true)
+    try {
+      await fetch('/api/categorize', { method: 'DELETE' })
+    } catch { /* ignore */ }
+  }
+
   async function startCategorization() {
     setError('')
     setRunning(true)
-
+    setStopping(false)
+    setDone(false)
     try {
       const res = await fetch('/api/categorize', {
         method: 'POST',
@@ -721,38 +768,35 @@ function CategorizeStep() {
         const data = await res.json() as { error?: string }
         throw new Error(data.error ?? 'Failed to start categorization')
       }
-      // 409 means already running — fine, just poll
-      pollStatus(true)
+      pollStatus()
     } catch (err) {
-      setError(`Failed to start categorization: ${err instanceof Error ? err.message : String(err)}`)
+      setError(`Failed to start: ${err instanceof Error ? err.message : String(err)}`)
       setRunning(false)
     }
   }
 
-  function pollStatus(hasSeenRunning = false) {
-    let seenRunning = hasSeenRunning
+  function pollStatus() {
     const interval = setInterval(async () => {
       try {
         const res = await fetch('/api/categorize')
         const data = await res.json() as CategorizeStatus
         setStatus(data)
-        if (data.status === 'running' || data.status === 'stopping') {
-          seenRunning = true
-        }
-        // Only mark done if we actually witnessed the pipeline running, then stopping
-        if (data.status === 'idle' && seenRunning) {
+        if (data.status === 'stopping') setStopping(true)
+        if (data.status === 'idle') {
           clearInterval(interval)
           setDone(true)
           setRunning(false)
+          setStopping(false)
         }
       } catch {
         clearInterval(interval)
         setRunning(false)
       }
-    }, 2000)
+    }, 1000)
   }
 
-  const progress = status ? Math.round(((status.done ?? 0) / Math.max(status.total ?? 1, 1)) * 100) : 0
+  const progress = status ? Math.round((status.done / Math.max(status.total, 1)) * 100) : 0
+  const currentStageInfo = status?.stage ? STAGE_INFO[status.stage] : null
 
   return (
     <div className="space-y-6">
@@ -770,27 +814,78 @@ function CategorizeStep() {
 
       {running && (
         <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <Loader2 size={20} className="text-indigo-400 animate-spin shrink-0" />
-            <p className="text-zinc-300 font-medium">
-              {status
-                ? status.stage
-                  ? `${status.stage === 'categorize' ? `${status.done ?? 0} / ${status.total ?? 0} categorized` : status.stage.replace('_', ' ') + '…'}`
-                  : 'Starting…'
-                : 'Starting…'}
-            </p>
-          </div>
+          {/* Current stage */}
+          {currentStageInfo && (
+            <div className="flex items-start gap-3 p-3.5 rounded-xl bg-indigo-500/8 border border-indigo-500/20">
+              <div className="text-indigo-400 mt-0.5 shrink-0">{currentStageInfo.icon}</div>
+              <div>
+                <p className="text-zinc-200 text-sm font-medium">{currentStageInfo.label}</p>
+                <p className="text-zinc-500 text-xs mt-0.5">{currentStageInfo.desc}</p>
+              </div>
+              <Loader2 size={14} className="text-indigo-400 animate-spin shrink-0 ml-auto mt-0.5" />
+            </div>
+          )}
+
+          {/* Stage counters */}
+          {status?.stageCounts && (
+            <div className="space-y-1.5">
+              {([
+                { key: 'visionTagged', label: 'images analyzed', icon: <Eye size={13} />, active: status.stage === 'vision' || status.stage === 'parallel' },
+                { key: 'entitiesExtracted', label: 'entities extracted', icon: <Tag size={13} />, active: status.stage === 'entities' },
+                { key: 'enriched', label: 'bookmarks enriched', icon: <Brain size={13} />, active: status.stage === 'enrichment' || status.stage === 'parallel' },
+                { key: 'categorized', label: 'categorized', icon: <Layers size={13} />, active: status.stage === 'categorize' || status.stage === 'parallel' },
+              ] as { key: keyof StageCounts; label: string; icon: React.ReactNode; active: boolean }[]).map(({ key, label, icon, active }) => {
+                const count = status.stageCounts[key]
+                const total = key === 'categorized' ? status.total : null
+                return (
+                  <div key={key} className={`flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors ${active ? 'bg-indigo-500/8 border-indigo-500/20' : 'bg-zinc-800/40 border-zinc-700/30'}`}>
+                    <span className={active ? 'text-indigo-400' : 'text-zinc-600'}>{icon}</span>
+                    <span className={`text-sm font-semibold tabular-nums ${active ? 'text-indigo-300' : count > 0 ? 'text-zinc-200' : 'text-zinc-600'}`}>
+                      {count}
+                    </span>
+                    <span className="text-zinc-500 text-sm">
+                      {label}
+                      {total != null && total > 0 ? <span className="text-zinc-600"> — {total - count} remaining</span> : null}
+                    </span>
+                    {active && <Loader2 size={12} className="text-indigo-400 animate-spin ml-auto shrink-0" />}
+                    {!active && count > 0 && <CheckCircle size={12} className="text-emerald-500 ml-auto shrink-0" />}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Stop button */}
+          <button
+            onClick={() => void stopCategorization()}
+            disabled={stopping}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed text-red-400 text-sm font-medium transition-colors border border-red-500/20"
+          >
+            <StopCircle size={15} />
+            {stopping ? 'Stopping…' : 'Stop pipeline'}
+          </button>
+
           {status?.lastError && (
             <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
               ⚠ {status.lastError}
             </p>
           )}
-          <Progress.Root className="relative h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
-            <Progress.Indicator
-              className="h-full bg-indigo-500 transition-all duration-500"
-              style={{ width: `${progress}%` }}
-            />
-          </Progress.Root>
+
+          {/* Progress bar during categorize/parallel stage */}
+          {(status?.stage === 'categorize' || status?.stage === 'parallel') && (
+            <div className="space-y-2">
+              <div className="flex justify-between text-xs text-zinc-500">
+                <span>{status.done} / {status.total} bookmarks</span>
+                <span>{progress}%</span>
+              </div>
+              <Progress.Root className="relative h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+                <Progress.Indicator
+                  className="h-full bg-indigo-500 transition-all duration-500"
+                  style={{ width: `${progress}%` }}
+                />
+              </Progress.Root>
+            </div>
+          )}
         </div>
       )}
 
@@ -799,7 +894,16 @@ function CategorizeStep() {
           <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center">
             <CheckCircle size={32} className="text-emerald-400" />
           </div>
-          <p className="text-xl font-bold text-zinc-100">Categorization Complete!</p>
+          <div className="text-center">
+            <p className="text-xl font-bold text-zinc-100">Categorization Complete!</p>
+            {status?.stageCounts && (
+              <p className="text-zinc-500 text-sm mt-1">
+                {status.stageCounts.visionTagged} images analyzed ·{' '}
+                {status.stageCounts.enriched} bookmarks enriched ·{' '}
+                {status.stageCounts.categorized} categorized
+              </p>
+            )}
+          </div>
           <Link
             href="/bookmarks"
             className="flex items-center gap-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
@@ -854,6 +958,16 @@ export default function ImportPage() {
   const [step, setStep] = useState<Step>(1)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const [importing, setImporting] = useState(false)
+
+  // Auto-resume to step 3 if the pipeline is already running (e.g. user navigated away and back)
+  useEffect(() => {
+    fetch('/api/categorize')
+      .then((r) => r.json())
+      .then((d: { status: string }) => {
+        if (d.status === 'running' || d.status === 'stopping') setStep(3)
+      })
+      .catch(() => {})
+  }, [])
 
   async function handleFile(file: File) {
     setStep(2)

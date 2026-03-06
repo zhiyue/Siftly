@@ -100,6 +100,21 @@ function isActive(pathname: string, href: string): boolean {
   return pathname.startsWith(href)
 }
 
+interface PipelineStatus {
+  status: 'idle' | 'running' | 'stopping'
+  stage: string | null
+  done: number
+  total: number
+}
+
+const PIPELINE_STAGE_LABELS: Record<string, string> = {
+  vision: 'Analyzing images',
+  entities: 'Extracting entities',
+  enrichment: 'Generating tags',
+  categorize: 'Categorizing',
+  parallel: 'Processing in parallel',
+}
+
 export default function Nav() {
   const pathname = usePathname()
   const [categories, setCategories] = useState<CategoryItem[]>([])
@@ -109,6 +124,7 @@ export default function Nav() {
     if (typeof window === 'undefined') return true
     return localStorage.getItem('nav-collections-open') !== 'false'
   })
+  const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
 
   function toggleCollections() {
     setCollectionsOpen((v) => {
@@ -136,6 +152,17 @@ export default function Nav() {
       .then((r) => r.json())
       .then((d: { categories: CategoryItem[] }) => setCategories(d.categories ?? []))
       .catch(() => {})
+
+    // Poll pipeline status every 3s to show global indicator
+    function pollPipeline() {
+      fetch('/api/categorize')
+        .then((r) => r.json())
+        .then((d: PipelineStatus) => setPipeline(d))
+        .catch(() => {})
+    }
+    pollPipeline()
+    const interval = setInterval(pollPipeline, 3000)
+    return () => clearInterval(interval)
   }, [])
 
   const visibleCats = showAllCats ? categories : categories.slice(0, 8)
@@ -153,6 +180,26 @@ export default function Nav() {
           <ThemeToggle />
         </div>
       </div>
+
+      {/* Pipeline running indicator — hidden on /categorize and /import */}
+      {pipeline && (pipeline.status === 'running' || pipeline.status === 'stopping') &&
+       pathname !== '/categorize' && pathname !== '/import' && (
+        <Link
+          href="/categorize"
+          className="mx-3 mt-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/15 transition-colors"
+        >
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500" />
+          </span>
+          <span className="text-[11px] font-medium text-indigo-300 truncate">
+            {pipeline.stage ? (PIPELINE_STAGE_LABELS[pipeline.stage] ?? pipeline.stage) : 'AI pipeline'}
+            {pipeline.stage === 'categorize' && pipeline.total > 0
+              ? ` ${pipeline.done}/${pipeline.total}`
+              : '…'}
+          </span>
+        </Link>
+      )}
 
       {/* Ctrl+K search trigger */}
       <div className="px-3 pt-3 pb-1">

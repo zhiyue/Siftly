@@ -22,7 +22,7 @@ interface MindMapResponse {
 }
 
 const ROOT_POSITION = { x: 0, y: 0 }
-const CATEGORY_RADIUS = 220
+const CATEGORY_RADIUS = 300
 const TWEET_RADIUS = 200
 
 function categoryPosition(index: number, total: number): { x: number; y: number } {

@@ -57,7 +57,7 @@ function extractLegend(nodes: Node[]): CategoryLegendItem[] {
     })
 }
 
-type CategorizeStage = 'vision' | 'entities' | 'enrichment' | 'categorize' | null
+type CategorizeStage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | null
 
 interface CategorizeStatus {
   status: 'idle' | 'running' | 'stopping'
@@ -71,6 +71,7 @@ const STAGE_LABELS: Record<NonNullable<CategorizeStage>, string> = {
   vision: 'Analyzing images…',
   enrichment: 'Generating semantic tags…',
   categorize: 'Categorizing bookmarks…',
+  parallel: 'Processing bookmarks in parallel…',
 }
 
 function UncategorizedState({ totalBookmarks }: { totalBookmarks: number }) {
@@ -78,6 +79,21 @@ function UncategorizedState({ totalBookmarks }: { totalBookmarks: number }) {
   const [done, setDone] = useState(false)
   const [status, setStatus] = useState<CategorizeStatus | null>(null)
   const [error, setError] = useState('')
+
+  // Auto-attach if pipeline is already running (e.g. started from import screen)
+  useEffect(() => {
+    fetch('/api/categorize')
+      .then((r) => r.json())
+      .then((d: CategorizeStatus) => {
+        if (d.status === 'running' || d.status === 'stopping') {
+          setStatus(d)
+          setRunning(true)
+          pollStatus()
+        }
+      })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function startCategorization() {
     setError('')
@@ -174,11 +190,143 @@ function UncategorizedState({ totalBookmarks }: { totalBookmarks: number }) {
   )
 }
 
+function MindmapOverlay({
+  totalBookmarks,
+  pipeline,
+  onDismiss,
+}: {
+  totalBookmarks: number
+  pipeline: CategorizeStatus | null
+  onDismiss: () => void
+}) {
+  const [running, setRunning] = useState(pipeline?.status === 'running' || pipeline?.status === 'stopping')
+  const [done, setDone] = useState(false)
+  const [status, setStatus] = useState<CategorizeStatus | null>(pipeline)
+  const [error, setError] = useState('')
+
+  // Auto-attach if pipeline is running
+  useEffect(() => {
+    if (pipeline?.status === 'running' || pipeline?.status === 'stopping') {
+      setRunning(true)
+      pollStatus()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function pollStatus() {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/categorize')
+        const data = await res.json() as CategorizeStatus
+        setStatus(data)
+        if (data.status === 'idle') {
+          clearInterval(interval)
+          setDone(true)
+          setRunning(false)
+          setTimeout(() => window.location.reload(), 800)
+        }
+      } catch {
+        clearInterval(interval)
+        setRunning(false)
+      }
+    }, 1500)
+  }
+
+  async function startCategorization() {
+    setError('')
+    setRunning(true)
+    try {
+      const res = await fetch('/api/categorize', { method: 'POST' })
+      if (!res.ok) {
+        const d = await res.json() as { error?: string }
+        throw new Error(d.error ?? 'Failed to start')
+      }
+      pollStatus()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start')
+      setRunning(false)
+    }
+  }
+
+  const isPipelineRunning = pipeline?.status === 'running' || pipeline?.status === 'stopping'
+  const stageLabel = status?.stage ? STAGE_LABELS[status.stage] : 'Starting…'
+  const progress = status?.stage === 'categorize' && status.total > 0
+    ? Math.round((status.done / status.total) * 100)
+    : null
+
+  return (
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-zinc-950/80 backdrop-blur-sm">
+      <div className="bg-zinc-900 border border-zinc-700/60 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl text-center">
+        {done ? (
+          <div className="flex flex-col items-center gap-4">
+            <CheckCircle size={44} className="text-emerald-400" />
+            <p className="text-xl font-bold text-zinc-100">Categorization complete!</p>
+            <p className="text-zinc-500 text-sm">Reloading your mindmap…</p>
+            <Loader2 size={18} className="text-indigo-400 animate-spin" />
+          </div>
+        ) : running ? (
+          <div className="flex flex-col items-center gap-5">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
+              <Loader2 size={32} className="text-indigo-400 animate-spin" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-zinc-100">AI Categorization in Progress</p>
+              <p className="text-zinc-400 text-sm mt-1.5">{stageLabel}</p>
+              {status?.stage === 'categorize' && status.total > 0 && (
+                <p className="text-zinc-500 text-sm mt-1">
+                  {status.done} / {status.total} bookmarks
+                  {progress !== null && ` (${progress}%)`}
+                </p>
+              )}
+            </div>
+            <p className="text-zinc-600 text-xs">
+              The mindmap will populate automatically when done.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-5">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
+              <Sparkles size={28} className="text-indigo-400" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-zinc-100">Bookmarks Not Categorized Yet</p>
+              <p className="text-zinc-400 text-sm mt-2 leading-relaxed">
+                You have <span className="text-zinc-200 font-semibold">{totalBookmarks.toLocaleString()}</span> bookmarks imported.
+                The mindmap will fill in once AI categorization completes.
+              </p>
+            </div>
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+            <div className="flex flex-col gap-2 w-full">
+              <button
+                onClick={() => void startCategorization()}
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
+              >
+                <Sparkles size={16} />
+                Start AI Categorization
+              </button>
+              {isPipelineRunning && (
+                <button
+                  onClick={onDismiss}
+                  className="text-zinc-600 hover:text-zinc-400 text-sm transition-colors py-1"
+                >
+                  Dismiss and view empty map
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function MindmapPage() {
   const [data, setData] = useState<MindmapData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [totalBookmarks, setTotalBookmarks] = useState(0)
+  const [pipeline, setPipeline] = useState<CategorizeStatus | null>(null)
+  const [overlayDismissed, setOverlayDismissed] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -187,10 +335,12 @@ export default function MindmapPage() {
         return r.json() as Promise<MindmapData>
       }),
       fetch('/api/stats').then((r) => r.json() as Promise<{ totalBookmarks?: number }>),
+      fetch('/api/categorize').then((r) => r.json() as Promise<CategorizeStatus>),
     ])
-      .then(([mindmapData, stats]) => {
+      .then(([mindmapData, stats, pipelineStatus]) => {
         setData(mindmapData)
         setTotalBookmarks(stats.totalBookmarks ?? 0)
+        setPipeline(pipelineStatus)
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Unknown error'))
       .finally(() => setLoading(false))
@@ -215,7 +365,6 @@ export default function MindmapPage() {
     )
   }
 
-  // Bookmarks exist but nothing is categorized yet → show AI categorize CTA
   if (!data || data.nodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-screen w-full">
@@ -231,12 +380,26 @@ export default function MindmapPage() {
     )
   }
 
+  // Check if categories exist but nothing is assigned yet
+  const totalCategorized = data.nodes
+    .filter((n) => n.type === 'category')
+    .reduce((sum, n) => sum + (((n.data as { count?: number }).count) ?? 0), 0)
+
+  const showOverlay = !overlayDismissed && totalBookmarks > 0 && totalCategorized === 0
+
   const legend = extractLegend(data.nodes)
 
   return (
     <div className="relative w-full h-screen">
       <Legend categories={legend} />
       <MindmapCanvas initialNodes={data.nodes} initialEdges={data.edges} />
+      {showOverlay && (
+        <MindmapOverlay
+          totalBookmarks={totalBookmarks}
+          pipeline={pipeline}
+          onDismiss={() => setOverlayDismissed(true)}
+        />
+      )}
     </div>
   )
 }

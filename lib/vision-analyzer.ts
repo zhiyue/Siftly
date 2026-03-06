@@ -6,7 +6,7 @@ import { buildImageContext } from '@/lib/image-context'
 let _cachedModel: string | null = null
 let _modelCacheExpiry = 0
 
-async function getAnthropicModel(): Promise<string> {
+export async function getAnthropicModel(): Promise<string> {
   if (_cachedModel && Date.now() < _modelCacheExpiry) return _cachedModel
   const setting = await prisma.setting.findUnique({ where: { key: 'anthropicModel' } })
   _cachedModel = setting?.value ?? 'claude-haiku-4-5-20251001'
@@ -35,7 +35,7 @@ async function fetchImageAsBase64(
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
         Referer: 'https://twitter.com/',
       },
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(4000),
     })
     if (!res.ok) return null
     const buffer = await res.arrayBuffer()
@@ -75,7 +75,7 @@ Rules:
 - GOOD tags: "bitcoin price chart", "react hooks", "frustrated man", "gpt-4", "bull market"`
 
 const RETRY_DELAYS_MS = [1500, 4000, 10000]
-const CONCURRENCY = 6
+const CONCURRENCY = 12
 
 async function analyzeImageWithRetry(
   url: string,
@@ -139,7 +139,7 @@ async function analyzeImageWithRetry(
   }
 }
 
-interface MediaItemForAnalysis {
+export interface MediaItemForAnalysis {
   id: string
   url: string
   thumbnailUrl: string | null
@@ -158,7 +158,7 @@ async function getCachedAnalysis(imageUrl: string, excludeId: string): Promise<s
   return existing?.imageTags ?? null
 }
 
-async function analyzeItem(
+export async function analyzeItem(
   item: MediaItemForAnalysis,
   client: Anthropic,
   model: string,
@@ -191,7 +191,7 @@ async function analyzeItem(
   return 0
 }
 
-async function runWithConcurrency<T>(
+export async function runWithConcurrency<T>(
   tasks: (() => Promise<T>)[],
   limit: number,
 ): Promise<T[]> {
@@ -224,7 +224,7 @@ export async function analyzeBatch(
   const tasks = analyzable.map((item) => async () => {
     if (shouldAbort?.()) return 0
     const result = await analyzeItem(item, client, model)
-    if (result > 0) onProgress?.(result)
+    onProgress?.(1)
     return result
   })
   const results = await runWithConcurrency(tasks, CONCURRENCY)
@@ -291,7 +291,7 @@ export async function analyzeAllUntagged(
 const ENRICH_BATCH_SIZE = 5
 const ENRICH_CONCURRENCY = 2
 
-interface BookmarkForEnrichment {
+export interface BookmarkForEnrichment {
   id: string
   text: string
   imageTags: string[] // filtered, non-empty
@@ -304,7 +304,7 @@ interface BookmarkForEnrichment {
   }
 }
 
-interface EnrichmentResult {
+export interface EnrichmentResult {
   id: string
   tags: string[]
   sentiment: string
@@ -344,7 +344,7 @@ BOOKMARKS:
 ${JSON.stringify(items, null, 1)}`
 }
 
-async function enrichBatchSemanticTags(
+export async function enrichBatchSemanticTags(
   bookmarks: BookmarkForEnrichment[],
   client: Anthropic,
 ): Promise<EnrichmentResult[]> {
@@ -467,33 +467,25 @@ export async function enrichAllBookmarks(
       const results = await enrichBatchSemanticTags(batch, client)
       const resultMap = new Map(results.map((r) => [r.id, r]))
 
-      const updates: ReturnType<typeof prisma.bookmark.update>[] = []
-
       for (const b of batch) {
         const result = resultMap.get(b.id)
         if (result?.tags.length) {
+          await prisma.bookmark.update({
+            where: { id: b.id },
+            data: {
+              semanticTags: JSON.stringify(result.tags),
+              enrichmentMeta: JSON.stringify({
+                sentiment: result.sentiment,
+                people: result.people,
+                companies: result.companies,
+              }),
+            },
+          })
           enriched++
           onProgress?.(enriched)
-          updates.push(
-            prisma.bookmark.update({
-              where: { id: b.id },
-              data: {
-                semanticTags: JSON.stringify(result.tags),
-                enrichmentMeta: JSON.stringify({
-                  sentiment: result.sentiment,
-                  people: result.people,
-                  companies: result.companies,
-                }),
-              },
-            }),
-          )
         }
         // Don't mark failed enrichments as '[]' — leave semanticTags: null so
         // they are retried on the next pipeline run without needing force=true.
-      }
-
-      if (updates.length > 0) {
-        await prisma.$transaction(updates)
       }
     })
 

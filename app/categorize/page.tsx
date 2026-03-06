@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { Sparkles, Loader2, CheckCircle, ChevronRight, Eye, Tag, Brain, Layers, StopCircle } from 'lucide-react'
 import * as Progress from '@radix-ui/react-progress'
 
-type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | null
+type Stage = 'vision' | 'entities' | 'enrichment' | 'categorize' | 'parallel' | null
 
 interface StageCounts {
   visionTagged: number
@@ -44,6 +44,11 @@ const STAGE_INFO: Record<NonNullable<Stage>, { label: string; icon: React.ReactN
     label: 'Categorizing',
     icon: <Layers size={14} />,
     desc: 'Assigning each bookmark to the most relevant categories',
+  },
+  parallel: {
+    label: 'Processing all stages in parallel',
+    icon: <Sparkles size={14} />,
+    desc: 'Vision, enrichment, and categorization running concurrently across 20 workers',
   },
 }
 
@@ -188,10 +193,10 @@ export default function CategorizePage() {
             {status?.stageCounts && (
               <div className="space-y-1.5">
                 {[
-                  { key: 'visionTagged', label: 'images analyzed', icon: <Eye size={13} />, active: status.stage === 'vision' },
+                  { key: 'visionTagged', label: 'images analyzed', icon: <Eye size={13} />, active: status.stage === 'vision' || status.stage === 'parallel' },
                   { key: 'entitiesExtracted', label: 'entities extracted', icon: <Tag size={13} />, active: status.stage === 'entities' },
-                  { key: 'enriched', label: 'bookmarks enriched', icon: <Brain size={13} />, active: status.stage === 'enrichment' },
-                  { key: 'categorized', label: 'categorized', icon: <Layers size={13} />, active: status.stage === 'categorize' },
+                  { key: 'enriched', label: 'bookmarks enriched', icon: <Brain size={13} />, active: status.stage === 'enrichment' || status.stage === 'parallel' },
+                  { key: 'categorized', label: 'categorized', icon: <Layers size={13} />, active: status.stage === 'categorize' || status.stage === 'parallel' },
                 ].map(({ key, label, icon, active }) => {
                   const count = status.stageCounts[key as keyof StageCounts]
                   const total = key === 'categorized' ? status.total : null
@@ -231,7 +236,7 @@ export default function CategorizePage() {
             )}
 
             {/* Overall progress bar */}
-            {status?.stage === 'categorize' && (
+            {(status?.stage === 'categorize' || status?.stage === 'parallel') && (
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-zinc-500">
                   <span>{status.done} / {status.total} bookmarks</span>

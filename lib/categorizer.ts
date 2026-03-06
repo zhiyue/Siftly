@@ -241,7 +241,7 @@ export async function categorizeBatch(
   return parseCategorizationResponse(textBlock.text, new Set(allSlugs))
 }
 
-async function writeCategoryResults(results: CategorizationResult[]): Promise<void> {
+export async function writeCategoryResults(results: CategorizationResult[]): Promise<void> {
   if (results.length === 0) return
 
   const tweetIds = results.map((r) => r.tweetId).filter(Boolean)
@@ -294,7 +294,7 @@ async function writeCategoryResults(results: CategorizationResult[]): Promise<vo
   ])
 }
 
-function mapBookmarkForCategorization(b: {
+export function mapBookmarkForCategorization(b: {
   tweetId: string
   text: string
   semanticTags: string | null
@@ -331,7 +331,7 @@ function mapBookmarkForCategorization(b: {
   }
 }
 
-const BOOKMARK_SELECT = {
+export const BOOKMARK_SELECT = {
   id: true,
   tweetId: true,
   text: true,

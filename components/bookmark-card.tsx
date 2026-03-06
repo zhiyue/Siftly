@@ -237,8 +237,21 @@ function MediaOverlay({ label, icon }: { label?: string; icon?: React.ReactNode 
   )
 }
 
-/** Placeholder shown when no thumbnail is available */
-function MediaPlaceholder({ onClick, label }: { onClick?: (e: React.MouseEvent) => void; label: string }) {
+/** Placeholder shown when no thumbnail is available — styled as a proper video preview */
+function MediaPlaceholder({ onClick, label, isVideo }: { onClick?: (e: React.MouseEvent) => void; label: string; isVideo?: boolean }) {
+  if (isVideo) {
+    return (
+      <div
+        className="h-48 flex flex-col items-center justify-center gap-3 bg-gradient-to-br from-zinc-800 to-zinc-900 hover:from-zinc-750 hover:to-zinc-850 transition-colors cursor-pointer select-none"
+        onClick={onClick}
+      >
+        <div className="w-14 h-14 rounded-full bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center border border-white/10">
+          <Play size={22} className="text-white fill-white ml-1" />
+        </div>
+        <span className="text-xs text-zinc-400 font-medium">{label}</span>
+      </div>
+    )
+  }
   return (
     <div
       className="h-48 flex items-center justify-center bg-zinc-800/70 hover:bg-zinc-800 transition-colors cursor-pointer"
@@ -328,13 +341,17 @@ function TopMediaSlot({ item, tweetUrl }: TopMediaSlotProps) {
   }
 
   // ── Playable video with thumbnail ──────────────────────────────────────────
-  const thumb = item.thumbnailUrl ?? null
+  // Guard: if thumbnailUrl is itself a video URL (happens with console script exports),
+  // don't try to render it as an <img> — treat it as no thumbnail.
+  const rawThumb = item.thumbnailUrl ?? null
+  const thumb = rawThumb && !isVideoUrl(rawThumb) ? rawThumb : null
 
   if (imgError || !thumb) {
     return (
       <MediaPlaceholder
         label={item.type === 'gif' ? '▶ Play GIF' : '▶ Play Video'}
         onClick={(e) => { e.stopPropagation(); setPlaying(true) }}
+        isVideo={item.type === 'video'}
       />
     )
   }
