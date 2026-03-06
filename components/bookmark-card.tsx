@@ -265,18 +265,9 @@ function MediaPlaceholder({ onClick, label, isVideo }: { onClick?: (e: React.Mou
 }
 
 function TopMediaSlot({ item, tweetUrl }: TopMediaSlotProps) {
-  const [playing, setPlaying] = useState(false)
   const [imgError, setImgError] = useState(false)
-  const [videoFailed, setVideoFailed] = useState(false)
-  const videoRef = useRef<HTMLVideoElement>(null)
 
-  useEffect(() => {
-    if (playing && videoRef.current) {
-      videoRef.current.play().catch(() => {})
-    }
-  }, [playing])
-
-  // ── Photo ──────────────────────────────────────────────────────────────────
+  // ── Photo: show inline ─────────────────────────────────────────────────────
   if (item.type === 'photo') {
     if (imgError) {
       return (
@@ -302,78 +293,30 @@ function TopMediaSlot({ item, tweetUrl }: TopMediaSlotProps) {
     )
   }
 
-  // ── Video/GIF playing inline ───────────────────────────────────────────────
-  if (playing && isVideoUrl(item.url) && !videoFailed) {
-    return (
-      // eslint-disable-next-line jsx-a11y/media-has-caption
-      <video
-        ref={videoRef}
-        src={item.url}
-        controls
-        className="w-full h-48 object-contain bg-zinc-950"
-        onError={() => { setPlaying(false); setVideoFailed(true) }}
-      />
-    )
-  }
-
-  // ── Link-to-X (stored URL is a thumbnail JPEG, or video playback failed) ──
-  if (!isVideoUrl(item.url) || videoFailed) {
-    const thumb = item.thumbnailUrl ?? (item.url.match(/\.(jpg|jpeg|png|webp)/) ? item.url : null)
-    return (
-      <a href={tweetUrl} target="_blank" rel="noopener noreferrer" className="relative block" onClick={(e) => e.stopPropagation()}>
-        {thumb && !imgError ? (
-          <div className="relative">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={proxyUrl(thumb)}
-              alt=""
-              className="w-full h-48 object-cover"
-              loading="lazy"
-              onError={() => setImgError(true)}
-            />
-            <MediaOverlay />
-          </div>
-        ) : (
-          <MediaPlaceholder label="Watch on X ↗" />
-        )}
-      </a>
-    )
-  }
-
-  // ── Playable video with thumbnail ──────────────────────────────────────────
-  // Guard: if thumbnailUrl is itself a video URL (happens with console script exports),
-  // don't try to render it as an <img> — treat it as no thumbnail.
+  // ── Video/GIF: always redirect to tweet — can't play locally ──────────────
+  // Guard: thumbnailUrl that is itself a video URL is not usable as an <img>
   const rawThumb = item.thumbnailUrl ?? null
-  const thumb = rawThumb && !isVideoUrl(rawThumb) ? rawThumb : null
-
-  if (imgError || !thumb) {
-    return (
-      <MediaPlaceholder
-        label={item.type === 'gif' ? '▶ Play GIF' : '▶ Play Video'}
-        onClick={(e) => { e.stopPropagation(); setPlaying(true) }}
-        isVideo={item.type === 'video'}
-      />
-    )
-  }
+  const thumb = rawThumb && !isVideoUrl(rawThumb) ? rawThumb
+    : (!isVideoUrl(item.url) ? item.url : null)
 
   return (
-    <div className="relative cursor-pointer" onClick={(e) => { e.stopPropagation(); setPlaying(true) }}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={proxyUrl(thumb)}
-        alt=""
-        className="w-full h-48 object-cover"
-        loading="lazy"
-        onError={() => setImgError(true)}
-      />
-      <MediaOverlay
-        icon={
-          <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center hover:bg-white/30 transition-colors">
-            <Play size={20} className="text-white fill-white ml-1" />
-          </div>
-        }
-      />
-    </div>
+    <a href={tweetUrl} target="_blank" rel="noopener noreferrer" className="relative block" onClick={(e) => e.stopPropagation()}>
+      {thumb && !imgError ? (
+        <div className="relative">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={proxyUrl(thumb)}
+            alt=""
+            className="w-full h-48 object-cover"
+            loading="lazy"
+            onError={() => setImgError(true)}
+          />
+          <MediaOverlay />
+        </div>
+      ) : (
+        <MediaPlaceholder label="Watch on X ↗" isVideo={item.type === 'video'} />
+      )}
+    </a>
   )
 }
 
@@ -559,7 +502,9 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
   const [expanded, setExpanded] = useState(false)
   const [editingCategories, setEditingCategories] = useState(false)
 
-  const tweetUrl = `https://twitter.com/${bookmark.authorHandle}/status/${bookmark.tweetId}`
+  const tweetUrl = (bookmark.authorHandle && bookmark.authorHandle !== 'unknown')
+    ? `https://twitter.com/${bookmark.authorHandle}/status/${bookmark.tweetId}`
+    : `https://twitter.com/i/web/status/${bookmark.tweetId}`
   const firstMedia = bookmark.mediaItems[0] ?? null
   const hasMedia = bookmark.mediaItems.length > 0
   const dateStr = formatDate(bookmark.tweetCreatedAt ?? bookmark.importedAt ?? null)
@@ -615,7 +560,7 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
     (firstMedia.type === 'photo' || isVideoUrl(firstMedia.url))
 
   return (
-    <div className="group relative bg-zinc-900 border border-zinc-800 rounded-2xl hover:border-zinc-700 hover:shadow-xl hover:shadow-black/30 transition-all duration-200 overflow-hidden flex flex-col h-full">
+    <div className="group relative bg-zinc-900 border border-zinc-800 rounded-2xl hover:border-zinc-700 hover:shadow-xl hover:shadow-black/30 transition-all duration-200 overflow-hidden flex flex-col flex-1">
 
       {/* Top media — full bleed, no padding */}
       {firstMedia && (

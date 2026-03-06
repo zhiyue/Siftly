@@ -468,6 +468,7 @@ function DataSection() {
 function DangerZoneSection({ onToast }: { onToast: (t: Toast) => void }) {
   const [confirming, setConfirming] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [cleared, setCleared] = useState(false)
 
   async function handleClearAll() {
     setClearing(true)
@@ -479,6 +480,8 @@ function DangerZoneSection({ onToast }: { onToast: (t: Toast) => void }) {
       }
       onToast({ type: 'success', message: 'All bookmarks deleted successfully' })
       setConfirming(false)
+      setCleared(true)
+      setTimeout(() => setCleared(false), 3000)
     } catch (err) {
       onToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to clear bookmarks' })
     } finally {
@@ -498,7 +501,12 @@ function DangerZoneSection({ onToast }: { onToast: (t: Toast) => void }) {
           <p className="text-sm font-medium text-zinc-300">Clear all bookmarks</p>
           <p className="text-xs text-zinc-500 mt-0.5">Permanently delete all imported bookmarks</p>
         </div>
-        {!confirming ? (
+        {cleared ? (
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20">
+            <Check size={14} />
+            Cleared
+          </div>
+        ) : !confirming ? (
           <button
             onClick={() => setConfirming(true)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-red-400 bg-red-800/30 hover:bg-red-700/40 border border-red-700/50 hover:border-red-600/60 transition-all"
