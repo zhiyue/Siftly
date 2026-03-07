@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
+import { seedDefaultCategories } from '@/lib/categorizer'
 
 function generateSlug(name: string): string {
   return name
@@ -13,6 +14,10 @@ function generateSlug(name: string): string {
 
 export async function GET(): Promise<NextResponse> {
   try {
+    // Seed defaults on first load so the nav always has categories
+    const count = await prisma.category.count()
+    if (count === 0) await seedDefaultCategories()
+
     const categories = await prisma.category.findMany({
       orderBy: { name: 'asc' },
       include: {
