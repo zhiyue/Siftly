@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import prisma from '@/lib/db'
 import { ftsSearch } from '@/lib/fts'
-import { createCliAnthropicClient } from '@/lib/claude-cli-auth'
+import { resolveAnthropicClient } from '@/lib/claude-cli-auth'
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 interface CacheEntry { results: unknown; expiresAt: number }
@@ -37,17 +37,6 @@ async function getDbApiKey(): Promise<string> {
   return _apiKey
 }
 
-// CLI auth is tried before env var so .env placeholders don't block CLI users
-function resolveSearchClient(dbApiKey: string): Anthropic {
-  const baseURL = process.env.ANTHROPIC_BASE_URL
-  if (dbApiKey) return new Anthropic({ apiKey: dbApiKey, ...(baseURL ? { baseURL } : {}) })
-  const cliClient = createCliAnthropicClient(baseURL)
-  if (cliClient) return cliClient
-  const envKey = process.env.ANTHROPIC_API_KEY
-  if (envKey) return new Anthropic({ apiKey: envKey, ...(baseURL ? { baseURL } : {}) })
-  if (baseURL) return new Anthropic({ apiKey: 'proxy', baseURL })
-  throw new Error('No Anthropic API key configured. Add it in Settings or log in with Claude CLI.')
-}
 async function getAnthropicModel(): Promise<string> {
   if (_model && Date.now() < _modelExpiry) return _model
   const setting = await prisma.setting.findUnique({ where: { key: 'anthropicModel' } })
@@ -235,7 +224,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   let client: Anthropic
   try {
-    client = resolveSearchClient(apiKey)
+    client = resolveAnthropicClient({ dbKey: apiKey })
   } catch {
     return NextResponse.json({ error: 'No Anthropic API key configured. Add it in Settings or log in with Claude CLI.' }, { status: 400 })
   }

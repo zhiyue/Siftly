@@ -1,4 +1,7 @@
 import { execSync } from 'child_process'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
 import Anthropic from '@anthropic-ai/sdk'
 
 interface ClaudeOAuthCredentials {
@@ -9,29 +12,79 @@ interface ClaudeOAuthCredentials {
   rateLimitTier: string
 }
 
-/**
- * Reads Claude Code CLI credentials from the macOS keychain.
- * Returns null if not on macOS, CLI not installed, or not logged in.
- */
-function readCliCredentials(): ClaudeOAuthCredentials | null {
-  if (process.platform !== 'darwin') return null
+// Module-level cache to avoid repeated I/O on every request
+let cachedCredentials: ClaudeOAuthCredentials | null = null
+let cacheReadAt = 0
+const CACHE_TTL_MS = 60_000 // 1 minute
 
+/**
+ * Parses OAuth credentials from raw JSON string.
+ */
+function parseOAuthCredentials(raw: string): ClaudeOAuthCredentials | null {
+  try {
+    const parsed = JSON.parse(raw)
+    const oauth = parsed?.claudeAiOauth
+    if (!oauth?.accessToken) return null
+    return oauth as ClaudeOAuthCredentials
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Reads Claude Code CLI credentials from macOS Keychain.
+ */
+function readMacCredentials(): ClaudeOAuthCredentials | null {
   try {
     const raw = execSync('security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null', {
       encoding: 'utf8',
       timeout: 3000,
     }).trim()
-
     if (!raw) return null
-
-    const parsed = JSON.parse(raw)
-    const oauth = parsed?.claudeAiOauth
-    if (!oauth?.accessToken) return null
-
-    return oauth as ClaudeOAuthCredentials
+    return parseOAuthCredentials(raw)
   } catch {
     return null
   }
+}
+
+/**
+ * Reads Claude Code CLI credentials from ~/.claude/.credentials.json (Windows/Linux).
+ */
+function readFileCredentials(): ClaudeOAuthCredentials | null {
+  try {
+    const credPath = join(homedir(), '.claude', '.credentials.json')
+    const raw = readFileSync(credPath, 'utf8')
+    return parseOAuthCredentials(raw)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Reads Claude Code CLI credentials from the system credential store.
+ * Supports macOS Keychain and Windows/Linux file-based storage.
+ * Results are cached for 1 minute to avoid repeated I/O.
+ * Returns null if CLI not installed or not logged in.
+ */
+function readCliCredentials(): ClaudeOAuthCredentials | null {
+  const now = Date.now()
+
+  // Return cached credentials if still valid
+  if (cachedCredentials && now - cacheReadAt < CACHE_TTL_MS) {
+    // But check if token has expired
+    if (now <= cachedCredentials.expiresAt) {
+      return cachedCredentials
+    }
+  }
+
+  // Read fresh credentials
+  const creds = process.platform === 'darwin'
+    ? readMacCredentials()
+    : readFileCredentials()
+
+  cachedCredentials = creds
+  cacheReadAt = now
+  return creds
 }
 
 /**
@@ -79,8 +132,6 @@ export function getCliAuthStatus(): {
   subscriptionType?: string
   expired?: boolean
 } {
-  if (process.platform !== 'darwin') return { available: false }
-
   const creds = readCliCredentials()
   if (!creds) return { available: false }
 
@@ -90,4 +141,54 @@ export function getCliAuthStatus(): {
     subscriptionType: creds.subscriptionType,
     expired,
   }
+}
+
+/**
+ * Resolves an Anthropic client using the first available auth method:
+ * 1. Override key (explicit key from request)
+ * 2. DB-saved API key (pass pre-fetched to avoid async)
+ * 3. Logged-in Claude CLI session (OAuth Bearer)
+ * 4. ANTHROPIC_API_KEY env var
+ * 5. Local proxy via ANTHROPIC_BASE_URL
+ *
+ * CLI auth is checked before env var so .env placeholders don't block CLI users.
+ *
+ * @param options.overrideKey - Explicit key from request body
+ * @param options.dbKey - Pre-fetched key from prisma.setting (avoids async import)
+ * @param options.baseURL - Custom base URL (defaults to ANTHROPIC_BASE_URL env)
+ * @throws Error if no auth method is available
+ */
+export function resolveAnthropicClient(options: {
+  overrideKey?: string
+  dbKey?: string
+  baseURL?: string
+} = {}): Anthropic {
+  const baseURL = options.baseURL ?? process.env.ANTHROPIC_BASE_URL
+
+  // 1. Override key from request
+  if (options.overrideKey?.trim()) {
+    return new Anthropic({ apiKey: options.overrideKey.trim(), ...(baseURL ? { baseURL } : {}) })
+  }
+
+  // 2. DB-saved key
+  if (options.dbKey?.trim()) {
+    return new Anthropic({ apiKey: options.dbKey.trim(), ...(baseURL ? { baseURL } : {}) })
+  }
+
+  // 3. CLI auth (before env var to avoid .env placeholder blocking)
+  const cliClient = createCliAnthropicClient(baseURL)
+  if (cliClient) return cliClient
+
+  // 4. Environment variable
+  const envKey = process.env.ANTHROPIC_API_KEY?.trim()
+  if (envKey) {
+    return new Anthropic({ apiKey: envKey, ...(baseURL ? { baseURL } : {}) })
+  }
+
+  // 5. Local proxy (assumes proxy handles auth)
+  if (baseURL) {
+    return new Anthropic({ apiKey: 'proxy', baseURL })
+  }
+
+  throw new Error('No Anthropic API key found. Add your key in Settings, or log in with Claude CLI.')
 }

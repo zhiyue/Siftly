@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import prisma from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
-import { createCliAnthropicClient } from '@/lib/claude-cli-auth'
+import { resolveAnthropicClient } from '@/lib/claude-cli-auth'
 import { getAnthropicModel } from '@/lib/vision-analyzer'
 
 const BATCH_SIZE = 20
@@ -150,47 +150,6 @@ export async function seedDefaultCategories(): Promise<void> {
     }
   }
 }
-
-/**
- * Resolves an Anthropic client using the first available auth method:
- * 1. Override key (from request)
- * 2. DB-saved API key
- * 3. Logged-in Claude CLI session (OAuth Bearer via keychain)
- * 4. ANTHROPIC_API_KEY env var
- * 5. Local proxy via ANTHROPIC_BASE_URL
- *
- * CLI auth is intentionally checked before the env var so that users with
- * Claude Code CLI signed in are never blocked by a placeholder in .env.
- */
-async function resolveAnthropicClient(overrideKey?: string): Promise<Anthropic> {
-  const baseURL = process.env.ANTHROPIC_BASE_URL
-
-  if (overrideKey && overrideKey.trim() !== '') {
-    return new Anthropic({ apiKey: overrideKey.trim(), ...(baseURL ? { baseURL } : {}) })
-  }
-
-  const setting = await prisma.setting.findUnique({ where: { key: 'anthropicApiKey' } })
-  if (setting?.value && setting.value.trim() !== '') {
-    return new Anthropic({ apiKey: setting.value.trim(), ...(baseURL ? { baseURL } : {}) })
-  }
-
-  // Try CLI auth before env var — prevents .env placeholders from blocking CLI users
-  const cliClient = createCliAnthropicClient(baseURL)
-  if (cliClient) return cliClient
-
-  const envKey = process.env.ANTHROPIC_API_KEY
-  if (envKey && envKey.trim() !== '') {
-    return new Anthropic({ apiKey: envKey.trim(), ...(baseURL ? { baseURL } : {}) })
-  }
-
-  // Local proxy handles auth
-  if (baseURL) return new Anthropic({ apiKey: 'proxy', baseURL })
-
-  throw new Error(
-    'No Anthropic API key found. Add your key in Settings, or log in with the Claude CLI.',
-  )
-}
-
 
 function buildCategorizationPrompt(
   bookmarks: BookmarkForCategorization[],
@@ -401,7 +360,8 @@ export async function categorizeAll(
   await seedDefaultCategories()
 
   // Resolve auth once — avoids re-resolving inside every batch call
-  const client = await resolveAnthropicClient()
+  const apiKeySetting = await prisma.setting.findUnique({ where: { key: 'anthropicApiKey' } })
+  const client = resolveAnthropicClient({ dbKey: apiKeySetting?.value })
 
   // Load ALL categories (default + custom) for the prompt
   const dbCategories = await prisma.category.findMany({ select: { slug: true, name: true, description: true } })

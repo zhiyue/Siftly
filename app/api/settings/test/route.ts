@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import prisma from '@/lib/db'
-import { createCliAnthropicClient, getCliAuthStatus } from '@/lib/claude-cli-auth'
+import { resolveAnthropicClient, getCliAuthStatus } from '@/lib/claude-cli-auth'
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   let body: { provider?: string } = {}
@@ -16,22 +15,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (provider === 'anthropic') {
     const setting = await prisma.setting.findUnique({ where: { key: 'anthropicApiKey' } })
-    const apiKey = setting?.value?.trim() || process.env.ANTHROPIC_API_KEY || ''
-    const baseURL = process.env.ANTHROPIC_BASE_URL
+    const dbKey = setting?.value?.trim()
 
-    let client: Anthropic
-    if (apiKey) {
-      client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) })
-    } else {
-      const cliClient = createCliAnthropicClient(baseURL)
-      if (!cliClient) {
-        const cliStatus = getCliAuthStatus()
-        if (cliStatus.available && cliStatus.expired) {
-          return NextResponse.json({ working: false, error: 'Claude CLI session expired — run `claude` to refresh' })
-        }
-        return NextResponse.json({ working: false, error: 'No API key found. Add one in Settings or log in with Claude CLI.' })
+    let client
+    try {
+      client = resolveAnthropicClient({ dbKey })
+    } catch {
+      // Check if CLI auth is available but expired
+      const cliStatus = getCliAuthStatus()
+      if (cliStatus.available && cliStatus.expired) {
+        return NextResponse.json({ working: false, error: 'Claude CLI session expired — run `claude` to refresh' })
       }
-      client = cliClient
+      return NextResponse.json({ working: false, error: 'No API key found. Add one in Settings or log in with Claude CLI.' })
     }
 
     try {

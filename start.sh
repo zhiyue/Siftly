@@ -23,15 +23,30 @@ if [ ! -d "node_modules" ]; then
   echo ""
 fi
 
-# ── 2. Set up database if needed ──────────────────────────────────────────────
-if [ ! -f "prisma/dev.db" ]; then
-  echo "  Setting up database..."
-  npx prisma generate
-  npx prisma migrate deploy 2>/dev/null || npx prisma db push
+# ── 2. Create .env if missing ─────────────────────────────────────────────────
+if [ ! -f ".env" ]; then
+  echo "  Creating .env file..."
+  echo 'DATABASE_URL="file:./prisma/dev.db"' > .env
   echo ""
 fi
 
-# ── 3. Check auth ─────────────────────────────────────────────────────────────
+# ── 3. Set up database ────────────────────────────────────────────────────────
+GENERATED_CLIENT="app/generated/prisma/client/index.js"
+SCHEMA_FILE="prisma/schema.prisma"
+
+# Only regenerate if client is missing or schema is newer
+if [ ! -f "$GENERATED_CLIENT" ] || [ "$SCHEMA_FILE" -nt "$GENERATED_CLIENT" ]; then
+  echo "  Generating Prisma client..."
+  npx prisma generate
+fi
+
+if [ ! -f "prisma/dev.db" ]; then
+  echo "  Setting up database..."
+  npx prisma migrate deploy 2>/dev/null || npx prisma db push
+fi
+echo ""
+
+# ── 4. Check auth ─────────────────────────────────────────────────────────────
 if command -v claude &>/dev/null; then
   echo -e "  ${GREEN}✓${NC} Claude CLI detected — AI features will use your subscription automatically"
 else
@@ -39,12 +54,22 @@ else
 fi
 echo ""
 
-# ── 4. Open browser and start ─────────────────────────────────────────────────
+# ── 5. Open browser and start ─────────────────────────────────────────────────
 echo "  Starting on http://localhost:3000"
 echo "  Press Ctrl+C to stop"
 echo ""
 
-# Open browser after a short delay
-(sleep 2 && open http://localhost:3000 2>/dev/null) &
+# Cross-platform browser open
+open_browser() {
+  local url="$1"
+  case "$(uname -s)" in
+    Darwin)  open "$url" ;;
+    Linux)   xdg-open "$url" 2>/dev/null || sensible-browser "$url" 2>/dev/null ;;
+    MINGW*|MSYS*|CYGWIN*) start "$url" ;;
+    *)       echo "  Open $url in your browser" ;;
+  esac
+}
+
+(sleep 2 && open_browser http://localhost:3000) &
 
 npx next dev

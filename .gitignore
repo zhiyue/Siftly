@@ -59,3 +59,6 @@ Thumbs.db
 
 # Promo video tool (local only)
 promo-video/
+
+# Claude Code local settings
+.claude/
