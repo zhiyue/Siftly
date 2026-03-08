@@ -12,7 +12,7 @@ If you discover a security vulnerability in Siftly, please report it responsibly
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, please DM [@viperrcrypto](https://twitter.com/viperrcrypto) on X.
+Instead, please DM [@viperr](https://x.com/viperr) on X.
 
 ### What to include
 
