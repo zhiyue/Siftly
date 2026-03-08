@@ -30,7 +30,15 @@ interface MediaEntity {
   video_info?: { variants?: MediaVariant[] }
 }
 
+interface ArticleResult {
+  title?: string
+  preview_image?: { url?: string }
+  cover_media?: { media_info?: { original_img_url?: string } }
+  content?: string
+}
+
 interface TweetResult {
+  __typename?: string
   rest_id?: string
   legacy?: {
     full_text?: string
@@ -43,6 +51,9 @@ interface TweetResult {
       result?: { legacy?: { screen_name?: string; name?: string } }
     }
   }
+  note_tweet?: { note_tweet_results?: { result?: { text?: string } } }
+  article?: { article_results?: { result?: ArticleResult } }
+  tweet?: TweetResult
 }
 
 function bestVideoUrl(variants: MediaVariant[]): string | null {
@@ -53,10 +64,24 @@ function bestVideoUrl(variants: MediaVariant[]): string | null {
   )
 }
 
+function tweetFullText(tweet: TweetResult): string {
+  if (tweet.note_tweet?.note_tweet_results?.result?.text) {
+    return tweet.note_tweet.note_tweet_results.result.text
+  }
+  const article = tweet.article?.article_results?.result
+  if (article) {
+    const parts: string[] = []
+    if (article.title) parts.push(article.title)
+    if (article.content) parts.push(article.content)
+    if (parts.length > 0) return parts.join('\n\n')
+  }
+  return tweet.legacy?.full_text ?? ''
+}
+
 function extractMedia(tweet: TweetResult) {
   const entities =
     tweet.legacy?.extended_entities?.media ?? tweet.legacy?.entities?.media ?? []
-  return entities
+  const results = entities
     .map((m) => {
       const thumb = m.media_url_https ?? ''
       if (m.type === 'video' || m.type === 'animated_gif') {
@@ -68,6 +93,18 @@ function extractMedia(tweet: TweetResult) {
       return { type: 'photo' as const, url: thumb, thumbnailUrl: thumb }
     })
     .filter(Boolean) as { type: string; url: string; thumbnailUrl: string }[]
+
+  if (results.length === 0) {
+    const article = tweet.article?.article_results?.result
+    const coverUrl =
+      article?.cover_media?.media_info?.original_img_url ??
+      article?.preview_image?.url
+    if (coverUrl) {
+      results.push({ type: 'photo', url: coverUrl, thumbnailUrl: coverUrl })
+    }
+  }
+
+  return results
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -88,7 +125,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   let imported = 0
   let skipped = 0
 
-  for (const tweet of tweets) {
+  for (let tweet of tweets) {
+    // Unwrap TweetWithVisibilityResults
+    if (tweet.__typename === 'TweetWithVisibilityResults' && tweet.tweet) {
+      tweet = tweet.tweet
+    }
     if (!tweet.rest_id) continue
 
     const exists = await prisma.bookmark.findUnique({
@@ -107,7 +148,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const created = await prisma.bookmark.create({
       data: {
         tweetId: tweet.rest_id,
-        text: tweet.legacy?.full_text ?? '',
+        text: tweetFullText(tweet),
         authorHandle: userLegacy.screen_name ?? 'unknown',
         authorName: userLegacy.name ?? 'Unknown',
         tweetCreatedAt: tweet.legacy?.created_at

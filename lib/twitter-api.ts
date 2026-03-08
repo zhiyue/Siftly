@@ -17,7 +17,7 @@ const FEATURES = JSON.stringify({
   graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
   view_counts_everywhere_api_enabled: true,
   longform_notetweets_consumption_enabled: true,
-  responsive_web_twitter_article_tweet_consumption_enabled: false,
+  responsive_web_twitter_article_tweet_consumption_enabled: true,
   tweet_awards_web_tipping_enabled: false,
   freedom_of_speech_not_reach_fetch_enabled: true,
   standardized_nudges_misinfo: true,
@@ -57,12 +57,24 @@ interface UserLegacy {
   name?: string
 }
 
+interface ArticleCoverMedia {
+  media_info?: { original_img_url?: string }
+}
+
+interface ArticleResult {
+  title?: string
+  preview_image?: { url?: string }
+  cover_media?: ArticleCoverMedia
+  content?: string
+}
+
 export interface TweetResult {
   __typename?: string
   rest_id?: string
   legacy?: TweetLegacy
   core?: { user_results?: { result?: { legacy?: UserLegacy } } }
   note_tweet?: { note_tweet_results?: { result?: { text?: string } } }
+  article?: { article_results?: { result?: ArticleResult } }
   tweet?: TweetResult
 }
 
@@ -145,7 +157,7 @@ function bestVideoUrl(variants: MediaVariant[]): string | null {
 export function extractMedia(tweet: TweetResult) {
   const entities =
     tweet.legacy?.extended_entities?.media ?? tweet.legacy?.entities?.media ?? []
-  return entities
+  const results = entities
     .map((m) => {
       const thumb = m.media_url_https ?? ''
       if (m.type === 'video' || m.type === 'animated_gif') {
@@ -157,10 +169,36 @@ export function extractMedia(tweet: TweetResult) {
       return { type: 'photo' as const, url: thumb, thumbnailUrl: thumb }
     })
     .filter(Boolean) as { type: string; url: string; thumbnailUrl: string }[]
+
+  // If no media from entities, try article cover/preview image
+  if (results.length === 0) {
+    const article = tweet.article?.article_results?.result
+    const coverUrl =
+      article?.cover_media?.media_info?.original_img_url ??
+      article?.preview_image?.url
+    if (coverUrl) {
+      results.push({ type: 'photo', url: coverUrl, thumbnailUrl: coverUrl })
+    }
+  }
+
+  return results
 }
 
 export function tweetFullText(tweet: TweetResult): string {
-  return tweet.note_tweet?.note_tweet_results?.result?.text ?? tweet.legacy?.full_text ?? ''
+  // Prefer note tweet (long-form), then article title+content, then legacy text
+  if (tweet.note_tweet?.note_tweet_results?.result?.text) {
+    return tweet.note_tweet.note_tweet_results.result.text
+  }
+
+  const article = tweet.article?.article_results?.result
+  if (article) {
+    const parts: string[] = []
+    if (article.title) parts.push(article.title)
+    if (article.content) parts.push(article.content)
+    if (parts.length > 0) return parts.join('\n\n')
+  }
+
+  return tweet.legacy?.full_text ?? ''
 }
 
 // ── Import tweets to DB ───────────────────────────────────────────────────────

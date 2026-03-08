@@ -15,7 +15,7 @@ const FEATURES = JSON.stringify({
   graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
   view_counts_everywhere_api_enabled: true,
   longform_notetweets_consumption_enabled: true,
-  responsive_web_twitter_article_tweet_consumption_enabled: false,
+  responsive_web_twitter_article_tweet_consumption_enabled: true,
   tweet_awards_web_tipping_enabled: false,
   freedom_of_speech_not_reach_fetch_enabled: true,
   standardized_nudges_misinfo: true,
@@ -80,10 +80,21 @@ interface UserLegacy {
   name?: string
 }
 
+interface ArticleResult {
+  title?: string
+  preview_image?: { url?: string }
+  cover_media?: { media_info?: { original_img_url?: string } }
+  content?: string
+}
+
 interface TweetResult {
+  __typename?: string
   rest_id?: string
   legacy?: TweetLegacy
   core?: { user_results?: { result?: { legacy?: UserLegacy } } }
+  note_tweet?: { note_tweet_results?: { result?: { text?: string } } }
+  article?: { article_results?: { result?: ArticleResult } }
+  tweet?: TweetResult
 }
 
 async function fetchPage(authToken: string, ct0: string, source: Source, cursor?: string, userId?: string) {
@@ -132,7 +143,10 @@ function parsePage(data: unknown, source: Source): { tweets: TweetResult[]; next
     for (const entry of (instruction as any).entries ?? []) {
       const content = entry.content
       if (content?.entryType === 'TimelineTimelineItem') {
-        const tweet: TweetResult = content?.itemContent?.tweet_results?.result
+        let tweet: TweetResult = content?.itemContent?.tweet_results?.result
+        if (tweet?.__typename === 'TweetWithVisibilityResults' && tweet.tweet) {
+          tweet = tweet.tweet
+        }
         if (tweet?.rest_id) tweets.push(tweet)
       } else if (
         content?.entryType === 'TimelineTimelineCursor' &&
@@ -153,10 +167,24 @@ function bestVideoUrl(variants: MediaVariant[]): string | null {
   return mp4[0]?.url ?? null
 }
 
+function tweetFullText(tweet: TweetResult): string {
+  if (tweet.note_tweet?.note_tweet_results?.result?.text) {
+    return tweet.note_tweet.note_tweet_results.result.text
+  }
+  const article = tweet.article?.article_results?.result
+  if (article) {
+    const parts: string[] = []
+    if (article.title) parts.push(article.title)
+    if (article.content) parts.push(article.content)
+    if (parts.length > 0) return parts.join('\n\n')
+  }
+  return tweet.legacy?.full_text ?? ''
+}
+
 function extractMedia(tweet: TweetResult) {
   const entities =
     tweet.legacy?.extended_entities?.media ?? tweet.legacy?.entities?.media ?? []
-  return entities
+  const results = entities
     .map((m) => {
       const thumb = m.media_url_https ?? ''
       if (m.type === 'video' || m.type === 'animated_gif') {
@@ -168,6 +196,18 @@ function extractMedia(tweet: TweetResult) {
       return { type: 'photo' as const, url: thumb, thumbnailUrl: thumb }
     })
     .filter(Boolean) as { type: string; url: string; thumbnailUrl: string }[]
+
+  if (results.length === 0) {
+    const article = tweet.article?.article_results?.result
+    const coverUrl =
+      article?.cover_media?.media_info?.original_img_url ??
+      article?.preview_image?.url
+    if (coverUrl) {
+      results.push({ type: 'photo', url: coverUrl, thumbnailUrl: coverUrl })
+    }
+  }
+
+  return results
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -218,7 +258,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         const created = await prisma.bookmark.create({
           data: {
             tweetId: tweet.rest_id,
-            text: tweet.legacy?.full_text ?? '',
+            text: tweetFullText(tweet),
             authorHandle: userLegacy.screen_name ?? 'unknown',
             authorName: userLegacy.name ?? 'Unknown',
             tweetCreatedAt: tweet.legacy?.created_at
