@@ -174,6 +174,15 @@ function bestVideoUrl(variants: MediaVariant[]): string | null {
   return mp4[0]?.url ?? null
 }
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+}
+
 function articleBlocksText(article: ArticleResult): string {
   const blocks = article.content_state?.blocks ?? []
   const texts = blocks
@@ -185,7 +194,7 @@ function articleBlocksText(article: ArticleResult): string {
 
 function tweetFullText(tweet: TweetResult): string {
   if (tweet.note_tweet?.note_tweet_results?.result?.text) {
-    return tweet.note_tweet.note_tweet_results.result.text
+    return decodeHtmlEntities(tweet.note_tweet.note_tweet_results.result.text)
   }
   const article = tweet.article?.article_results?.result
   if (article) {
@@ -199,9 +208,9 @@ function tweetFullText(tweet: TweetResult): string {
       if (blocks) parts.push(blocks)
     }
 
-    if (parts.length > 0) return parts.join('\n\n')
+    if (parts.length > 0) return decodeHtmlEntities(parts.join('\n\n'))
   }
-  return tweet.legacy?.full_text ?? ''
+  return decodeHtmlEntities(tweet.legacy?.full_text ?? '')
 }
 
 function extractMedia(tweet: TweetResult) {
