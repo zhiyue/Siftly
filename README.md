@@ -285,7 +285,6 @@ siftly/
 │   ├── import/               # 3-step import flow (instructions → upload → categorize)
 │   ├── mindmap/              # Interactive graph
 │   ├── settings/             # Configuration
-│   ├── twitter-import/       # Alternative Twitter import page
 │   └── page.tsx              # Dashboard
 │
 ├── components/
