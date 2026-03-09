@@ -353,7 +353,7 @@ For Prisma command and workflow details, see:
 | [Prisma](https://www.prisma.io) | 7 | ORM + migrations |
 | [SQLite](https://sqlite.org) | — | Local database — zero setup, includes FTS5 |
 | [Tailwind CSS](https://tailwindcss.com) | v4 | Styling |
-| [Anthropic SDK](https://anthropic.com) | — | Vision, semantic tagging, categorization, search |
+| [Anthropic SDK](https://docs.anthropic.com) | — | Vision, semantic tagging, categorization, search |
 | [@xyflow/react](https://xyflow.com) | 12 | Interactive mindmap graph |
 | [Framer Motion](https://www.framer.com/motion/) | 12 | Animations |
 | [Radix UI](https://www.radix-ui.com) | — | Accessible UI primitives |
