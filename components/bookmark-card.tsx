@@ -33,28 +33,29 @@ interface LinkPreviewData {
 // Module-level cache: url → preview data (or null on error)
 const previewCache = new Map<string, LinkPreviewData | null>()
 
-function LinkPreview({ url, tweetUrl }: { url: string; tweetUrl: string }) {
+function LinkPreview({ url, tweetUrl, tweetId, prominent = false }: { url: string; tweetUrl: string; tweetId?: string; prominent?: boolean }) {
   const [data, setData] = useState<LinkPreviewData | null | 'loading'>('loading')
 
   useEffect(() => {
-    if (previewCache.has(url)) {
-      setData(previewCache.get(url) ?? null)
+    const cacheKey = tweetId ? `${url}:${tweetId}` : url
+    if (previewCache.has(cacheKey)) {
+      setData(previewCache.get(cacheKey) ?? null)
       return
     }
     let cancelled = false
-    fetch(`/api/link-preview?url=${encodeURIComponent(url)}`)
+    fetch(`/api/link-preview?url=${encodeURIComponent(url)}${tweetId ? `&tweetId=${tweetId}` : ''}`)
       .then((r) => r.json())
       .then((d: LinkPreviewData & { error?: string }) => {
         if (cancelled) return
         const result = d.error || !d.title ? null : d
-        previewCache.set(url, result)
+        previewCache.set(cacheKey, result)
         setData(result)
       })
       .catch(() => {
-        if (!cancelled) { previewCache.set(url, null); setData(null) }
+        if (!cancelled) { previewCache.set(cacheKey, null); setData(null) }
       })
     return () => { cancelled = true }
-  }, [url])
+  }, [url, tweetId])
 
   if (data === 'loading') {
     return (
@@ -66,11 +67,11 @@ function LinkPreview({ url, tweetUrl }: { url: string; tweetUrl: string }) {
   if (!data) {
     return (
       <a
-        href={url}
+        href={tweetUrl}
         target="_blank"
         rel="noopener noreferrer"
         onClick={(e) => e.stopPropagation()}
-        className="mt-2 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-800/40 hover:border-zinc-700 hover:bg-zinc-800/70 transition-all text-xs text-zinc-400 hover:text-zinc-200 max-w-full overflow-hidden"
+        className={`${prominent ? 'mt-1' : 'mt-2'} inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-800/40 hover:border-zinc-700 hover:bg-zinc-800/70 transition-all text-xs text-zinc-400 hover:text-zinc-200 max-w-full overflow-hidden`}
       >
         <Globe size={11} className="shrink-0 text-zinc-600" />
         <span className="truncate">{url.replace(/^https?:\/\//, '')}</span>
@@ -79,7 +80,76 @@ function LinkPreview({ url, tweetUrl }: { url: string; tweetUrl: string }) {
     )
   }
 
+  // X article pages return useless OG data — show a styled "View article" card instead
+  const isGenericXArticle = (data.domain === 'x.com' || data.domain === 'twitter.com') && !data.image && !data.description
+
   const href = data.url || url
+
+  // X article / generic X link with no useful OG data — show a clean "View on X" card
+  if (isGenericXArticle) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className={`${prominent ? 'mt-1' : 'mt-2'} flex items-center gap-3 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-800/40 hover:border-zinc-700 hover:bg-zinc-800/70 transition-all group/link px-4 py-3`}
+      >
+        <div className="w-10 h-10 rounded-lg bg-zinc-700/60 flex items-center justify-center shrink-0">
+          <svg viewBox="0 0 24 24" className="w-5 h-5 text-zinc-400" fill="currentColor">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+          </svg>
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-zinc-200 group-hover/link:text-white transition-colors">
+            {data.title?.includes('Article') ? 'View Article on X' : data.title || 'View on X'}
+          </p>
+          <p className="text-xs text-zinc-500 truncate">{data.domain}{data.url ? new URL(data.url).pathname : ''}</p>
+        </div>
+        <ExternalLink size={14} className="text-zinc-600 group-hover/link:text-zinc-400 transition-colors shrink-0" />
+      </a>
+    )
+  }
+
+  // Prominent mode: vertical layout with large image — used for link-only bookmarks
+  if (prominent) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="mt-1 flex flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-800/40 hover:border-zinc-700 hover:bg-zinc-800/70 transition-all group/link"
+      >
+        {data.image && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={data.image}
+            alt=""
+            className="w-full h-40 object-cover border-b border-zinc-800"
+            loading="lazy"
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+          />
+        )}
+        <div className="flex flex-col px-3 py-2.5 min-w-0 gap-1">
+          <p className="text-sm font-semibold text-zinc-200 line-clamp-2 group-hover/link:text-white transition-colors leading-snug">
+            {data.title}
+          </p>
+          {data.description && (
+            <p className="text-xs text-zinc-400 line-clamp-3 leading-relaxed">
+              {data.description}
+            </p>
+          )}
+          <div className="flex items-center gap-1 mt-0.5">
+            <Globe size={10} className="text-zinc-600 shrink-0" />
+            <span className="text-[10px] text-zinc-600 truncate">
+              {data.siteName || data.domain}
+            </span>
+          </div>
+        </div>
+      </a>
+    )
+  }
 
   return (
     <a
@@ -646,7 +716,7 @@ export default function BookmarkCard({ bookmark }: BookmarkCardProps) {
             <p className="text-xs text-zinc-700 italic">No text content</p>
           )}
           {previewUrl && (
-            <LinkPreview url={previewUrl} tweetUrl={tweetUrl} />
+            <LinkPreview url={previewUrl} tweetUrl={tweetUrl} tweetId={bookmark.tweetId} prominent={!displayText} />
           )}
         </div>
 
