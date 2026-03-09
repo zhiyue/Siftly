@@ -66,6 +66,7 @@ promo-video/
 
 # Editor
 .idea/
+.vscode/
 *.swp
 *.swo
 *~
