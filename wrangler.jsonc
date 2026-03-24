@@ -34,6 +34,13 @@
     ]
   },
 
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["PipelineDO"]
+    }
+  ],
+
   "vars": {
     "ANTHROPIC_BASE_URL": "",
     "OPENAI_BASE_URL": ""
