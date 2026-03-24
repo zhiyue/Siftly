@@ -78,6 +78,12 @@ export function getDb() {
 
 All `import prisma from '@/lib/db'` calls across the codebase change to `const prisma = getDb()`.
 
+**Important:** `getCloudflareContext()` only works inside a request context. `getDb()` must only be called inside route handlers or functions that run within a request — never at module top-level. Module-level `const prisma = getDb()` will crash.
+
+### Module-Level Caches
+
+Several files use module-level caches (`lib/settings.ts`, `app/api/search/ai/route.ts`) that rely on long-lived process memory. Workers are stateless — these caches will be cold on each request. This is acceptable for a single-user app with D1's low latency. No changes needed, but be aware of the behavior difference.
+
 ### FTS5 (`lib/fts.ts`)
 
 D1 supports FTS5 virtual tables. Core logic preserved with adjustments:
@@ -85,9 +91,23 @@ D1 supports FTS5 virtual tables. Core logic preserved with adjustments:
 - Raw SQL operations (CREATE VIRTUAL TABLE, INSERT, MATCH) may need to bypass Prisma and use `env.DB.prepare(...).run()` directly, since Prisma's D1 adapter has limited raw SQL support
 - D1 does not support exporting databases with virtual tables — backup strategy must account for this
 
+### FTS5 Implementation Strategy
+
+All FTS5 operations bypass Prisma entirely and use the D1 binding directly (`env.DB.prepare(...).run()`). Prisma's D1 adapter has limited and inconsistent support for `$executeRawUnsafe`, `$executeRaw`, and `$queryRaw`. To avoid implementation churn, `lib/fts.ts` will accept a D1 database handle and use it directly for all CREATE VIRTUAL TABLE, INSERT, and MATCH operations.
+
 ### D1 Transaction Limitation
 
-D1 does not support interactive transactions (`prisma.$transaction([...])`). The FTS rebuild batch inserts are replaced with D1's batch API (`env.DB.batch([stmt1, stmt2, ...])`) which provides atomicity.
+D1 does not support interactive transactions (`prisma.$transaction([...])`). All affected call sites:
+
+1. **`lib/fts.ts`** — batch inserts during FTS rebuild → use `env.DB.batch([...prepared statements])`
+2. **`lib/categorizer.ts` `writeCategoryResults()`** — upserts + updateMany → rewrite as raw SQL via `env.DB.batch()`
+3. **`app/api/bookmarks/route.ts` DELETE handler** — batch deleteMany → rewrite as raw SQL or sequential operations
+
+Note: Prisma client operations (e.g., `prisma.bookmarkCategory.upsert`) cannot be passed to D1's batch API. These must be rewritten as raw prepared SQL statements.
+
+### D1 Query Size Limits
+
+D1 has a 10MB response size limit per query. The `rawJson` field stores full tweet JSON which can be large. Operations that fetch all bookmarks (like FTS rebuild) must use cursor-based pagination to avoid exceeding limits.
 
 ## Section 3: AI Authentication Layer
 
@@ -102,7 +122,8 @@ All Node.js-specific auth code from `lib/claude-cli-auth.ts`:
 
 Also removed:
 - `lib/claude-cli.ts` — CLI subprocess calls (`claudePrompt()`, `spawnSync`)
-- `lib/codex-cli.ts` — if it depends on subprocess calls
+- `lib/codex-cli.ts` — subprocess calls (`codexPrompt()`)
+- `lib/openai-auth.ts` — same Node.js dependencies (`readFileSync`, `homedir`, `fs`, `os`, `path`); `resolveOpenAIClient()` simplified to: override key → DB-saved key → `OPENAI_API_KEY` Workers Secret
 
 ### Simplified Auth Chain
 
@@ -119,7 +140,14 @@ Also removed:
 
 ### Code Cleanup
 
-Remove all imports of `getCliAvailability`, `claudePrompt`, `modelNameToCliAlias`, `codexPrompt` from `lib/ai-client.ts`, `lib/categorizer.ts`, and any other files.
+Remove all imports of `getCliAvailability`, `claudePrompt`, `modelNameToCliAlias`, `codexPrompt`, `getCodexCliAvailability` from all files. Complete list of affected files:
+
+- `lib/ai-client.ts`
+- `lib/categorizer.ts`
+- `lib/vision-analyzer.ts`
+- `app/api/search/ai/route.ts`
+
+All CLI-first, SDK-fallback patterns in these files must be replaced with SDK-only paths.
 
 ## Section 4: Pipeline State Layer (Durable Objects)
 
@@ -147,10 +175,20 @@ Responsibilities:
 ### Long Task Execution via Alarms
 
 Durable Objects have a 30s CPU time limit per request but support Alarms:
-- Process one batch per alarm invocation
+- Process one batch per alarm invocation (batch = N bookmarks, configurable)
 - Set next alarm after each batch completes
 - State persists across alarm invocations in DO storage
 - Frontend polls GET endpoint for progress (no SSE needed)
+
+### Batch Processing Design
+
+The current pipeline uses `runWithConcurrency` (5 parallel workers), `catPending` queue with flush threshold, and closure-based state. This must be redesigned for alarm-based execution:
+
+- **Batch unit**: a fixed number of bookmarks (e.g., 10) processed per alarm tick
+- **Queue**: pending bookmark IDs stored in DO SQLite storage, dequeued per batch
+- **Sequential stages**: each alarm tick processes one stage for the current batch, then advances
+- **No concurrent workers**: DO is single-threaded; process bookmarks sequentially within each batch
+- **Categorization flush**: accumulate category results in DO storage, flush to D1 at stage boundaries
 
 ### Wrangler Config
 
@@ -200,17 +238,38 @@ New route `app/api/media/[key]/route.ts`:
 - `better-sqlite3` + `@types/better-sqlite3` + `@prisma/adapter-better-sqlite3`
 - All `child_process`, `fs`, `os` imports from auth code
 
+### `Buffer` Usage Replacement
+
+Workers do not have Node.js `Buffer` global. All occurrences must be replaced:
+
+- `lib/vision-analyzer.ts` `fetchImageAsBase64()`: `Buffer.from(buffer).toString('base64')` → use `btoa(String.fromCharCode(...new Uint8Array(buffer)))` or Workers-native approach
+- `lib/exporter.ts`: `Buffer.from(arrayBuffer)` and `zip.generateAsync({ type: 'nodebuffer' })` → change to `type: 'uint8array'`
+- `app/api/export/route.ts`: same JSZip `nodebuffer` issue
+- `lib/openai-auth.ts`: `Buffer.from(...)` for JWT parsing → removed with the file
+
+### Middleware Auth Conflict
+
+`middleware.ts` implements HTTP Basic Auth using `process.env.SIFTLY_USERNAME/SIFTLY_PASSWORD`. Since Cloudflare Access handles auth, this middleware should be removed. If retained for defense-in-depth, `process.env` must go through `getCloudflareContext().env`.
+
 ### Removed Files/Routes
 
 - `lib/claude-cli.ts` (subprocess calls)
 - `lib/codex-cli.ts` (subprocess calls)
+- `lib/openai-auth.ts` (filesystem/subprocess calls — simplified into `lib/ai-client.ts`)
 - `app/api/settings/cli-status/` (entire route)
 
 ### Config Adjustments
 
 - `next.config.ts`: remove `turbopack.root: __dirname`
+- `prisma.config.ts`: update — no longer references `process.env["DATABASE_URL"]`; migrations use `prisma migrate diff` to generate SQL, then `wrangler d1 migrations apply`
 - `DATABASE_URL` env var no longer needed (D1 via binding)
 - Secrets set via `wrangler secret put`
+
+### Local Development
+
+- `start.sh` updated to use `wrangler dev` (or `opennextjs-cloudflare dev`) instead of `next dev`
+- Wrangler provides a local D1 emulator for development
+- `wrangler.jsonc` supports `[env.dev]` overrides for local bindings
 
 ### Deployment Flow
 
