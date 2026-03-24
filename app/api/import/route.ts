@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { eq } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks, mediaItems, importJobs } from '@/lib/schema'
 import { parseBookmarksJson } from '@/lib/parser'
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -29,29 +31,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Failed to read file content' }, { status: 400 })
   }
 
-  const prisma = getDb()
+  const db = getDb()
 
   // Create an import job to track progress
-  const importJob = await prisma.importJob.create({
-    data: {
+  const inserted = await db
+    .insert(importJobs)
+    .values({
       filename,
       status: 'processing',
       totalCount: 0,
       processedCount: 0,
-    },
-  })
+    })
+    .returning({ id: importJobs.id })
+  const importJobId = inserted[0].id
 
   let parsedBookmarks
   try {
     parsedBookmarks = parseBookmarksJson(jsonString)
   } catch (err) {
-    await prisma.importJob.update({
-      where: { id: importJob.id },
-      data: {
+    await db
+      .update(importJobs)
+      .set({
         status: 'error',
         errorMessage: err instanceof Error ? err.message : String(err),
-      },
-    })
+      })
+      .where(eq(importJobs.id, importJobId))
     return NextResponse.json(
       { error: `Failed to parse bookmarks JSON: ${err instanceof Error ? err.message : String(err)}` },
       { status: 422 }
@@ -68,47 +72,53 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     ? sourceParam
     : (jsonSource === 'like' ? 'like' : 'bookmark')
 
-  await prisma.importJob.update({
-    where: { id: importJob.id },
-    data: { totalCount: parsedBookmarks.length },
-  })
+  await db
+    .update(importJobs)
+    .set({ totalCount: parsedBookmarks.length })
+    .where(eq(importJobs.id, importJobId))
 
   let importedCount = 0
   let skippedCount = 0
 
   for (const bookmark of parsedBookmarks) {
     try {
-      const existing = await prisma.bookmark.findUnique({
-        where: { tweetId: bookmark.tweetId },
-        select: { id: true },
-      })
+      const existing = await db
+        .select({ id: bookmarks.id })
+        .from(bookmarks)
+        .where(eq(bookmarks.tweetId, bookmark.tweetId))
+        .limit(1)
 
-      if (existing) {
+      if (existing.length > 0) {
         skippedCount++
         continue
       }
 
-      const created = await prisma.bookmark.create({
-        data: {
+      const created = await db
+        .insert(bookmarks)
+        .values({
           tweetId: bookmark.tweetId,
           text: bookmark.text,
           authorHandle: bookmark.authorHandle,
           authorName: bookmark.authorName,
-          tweetCreatedAt: bookmark.tweetCreatedAt,
+          tweetCreatedAt: bookmark.tweetCreatedAt
+            ? (bookmark.tweetCreatedAt instanceof Date
+                ? bookmark.tweetCreatedAt.toISOString()
+                : String(bookmark.tweetCreatedAt))
+            : null,
           rawJson: bookmark.rawJson,
           source,
-        },
-      })
+        })
+        .returning({ id: bookmarks.id })
 
       if (bookmark.media.length > 0) {
-        await prisma.mediaItem.createMany({
-          data: bookmark.media.map((m) => ({
-            bookmarkId: created.id,
+        await db.insert(mediaItems).values(
+          bookmark.media.map((m) => ({
+            bookmarkId: created[0].id,
             type: m.type,
             url: m.url,
             thumbnailUrl: m.thumbnailUrl ?? null,
           })),
-        })
+        )
       }
 
       importedCount++
@@ -118,16 +128,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  await prisma.importJob.update({
-    where: { id: importJob.id },
-    data: {
+  await db
+    .update(importJobs)
+    .set({
       status: 'done',
       processedCount: importedCount,
-    },
-  })
+    })
+    .where(eq(importJobs.id, importJobId))
 
   return NextResponse.json({
-    jobId: importJob.id,
+    jobId: importJobId,
     imported: importedCount,
     skipped: skippedCount,
     parsed: parsedBookmarks.length,

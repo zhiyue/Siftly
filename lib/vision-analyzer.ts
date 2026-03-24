@@ -1,4 +1,6 @@
+import { eq, and, isNull, not, gt, inArray, asc } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks, mediaItems } from '@/lib/schema'
 import { buildImageContext } from '@/lib/image-context'
 import { getActiveModel } from '@/lib/settings'
 import { AIClient } from '@/lib/ai-client'
@@ -79,13 +81,15 @@ async function fetchImageAsBase64(
     // 3. Upload to R2 in the background for future use
     if (r2Info) {
       const key = mediaKey(r2Info.bookmarkId, filenameFromUrl(url))
-      const prisma = getDb()
+      const db = getDb()
       // Fire-and-forget: don't block vision analysis on R2 upload
       uploadMedia(key, buffer, mediaType)
-        .then(() => prisma.mediaItem.update({
-          where: { id: r2Info.mediaItemId },
-          data: { localPath: key },
-        }))
+        .then(() =>
+          db
+            .update(mediaItems)
+            .set({ localPath: key })
+            .where(eq(mediaItems.id, r2Info.mediaItemId))
+        )
         .catch(() => { /* R2 upload failed — non-critical */ })
     }
 
@@ -196,12 +200,19 @@ export interface MediaItemForAnalysis {
  * Deduplicates API calls for the same image URL.
  */
 async function getCachedAnalysis(imageUrl: string, excludeId: string): Promise<string | null> {
-  const prisma = getDb()
-  const existing = await prisma.mediaItem.findFirst({
-    where: { url: imageUrl, imageTags: { not: null }, id: { not: excludeId } },
-    select: { imageTags: true },
-  })
-  return existing?.imageTags ?? null
+  const db = getDb()
+  const rows = await db
+    .select({ imageTags: mediaItems.imageTags })
+    .from(mediaItems)
+    .where(
+      and(
+        eq(mediaItems.url, imageUrl),
+        not(eq(mediaItems.id, excludeId)),
+        not(isNull(mediaItems.imageTags)),
+      )
+    )
+    .limit(1)
+  return rows[0]?.imageTags ?? null
 }
 
 export async function analyzeItem(
@@ -209,13 +220,13 @@ export async function analyzeItem(
   client: AIClient,
   model: string,
 ): Promise<number> {
-  const prisma = getDb()
+  const db = getDb()
   const imageUrl = item.type === 'video' ? (item.thumbnailUrl ?? item.url) : item.url
 
   // Check URL-level dedup cache first
   const cached = await getCachedAnalysis(imageUrl, item.id)
   if (cached) {
-    await prisma.mediaItem.update({ where: { id: item.id }, data: { imageTags: cached } })
+    await db.update(mediaItems).set({ imageTags: cached }).where(eq(mediaItems.id, item.id))
     return 1
   }
 
@@ -229,13 +240,13 @@ export async function analyzeItem(
   }
 
   if (tags) {
-    await prisma.mediaItem.update({ where: { id: item.id }, data: { imageTags: tags } })
+    await db.update(mediaItems).set({ imageTags: tags }).where(eq(mediaItems.id, item.id))
     return 1
   }
 
   // CRITICAL: Mark as attempted even on failure. Without this, the while loop in
   // analyzeAllUntagged re-fetches the same items forever (infinite loop).
-  await prisma.mediaItem.update({ where: { id: item.id }, data: { imageTags: '{}' } })
+  await db.update(mediaItems).set({ imageTags: '{}' }).where(eq(mediaItems.id, item.id))
   return 0
 }
 
@@ -281,12 +292,23 @@ export async function analyzeBatch(
 }
 
 export async function analyzeUntaggedImages(client: AIClient, limit = 10): Promise<number> {
-  const prisma = getDb()
-  const untagged = await prisma.mediaItem.findMany({
-    where: { imageTags: null, type: { in: ['photo', 'gif', 'video'] } },
-    take: limit,
-    select: { id: true, bookmarkId: true, url: true, thumbnailUrl: true, type: true },
-  })
+  const db = getDb()
+  const untagged = await db
+    .select({
+      id: mediaItems.id,
+      bookmarkId: mediaItems.bookmarkId,
+      url: mediaItems.url,
+      thumbnailUrl: mediaItems.thumbnailUrl,
+      type: mediaItems.type,
+    })
+    .from(mediaItems)
+    .where(
+      and(
+        isNull(mediaItems.imageTags),
+        inArray(mediaItems.type, ['photo', 'gif', 'video']),
+      )
+    )
+    .limit(limit)
   if (untagged.length === 0) return 0
   return analyzeBatch(untagged, client)
 }
@@ -299,7 +321,7 @@ export async function analyzeAllUntagged(
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
-  const prisma = getDb()
+  const db = getDb()
   const CHUNK = 15
   let total = 0
   let cursor: string | undefined
@@ -307,19 +329,24 @@ export async function analyzeAllUntagged(
   while (true) {
     if (shouldAbort?.()) break
 
-    // Use cursor-based pagination so failed items (marked '{}') are skipped naturally,
-    // and we never re-fetch items we already attempted this run.
-    const untagged = await prisma.mediaItem.findMany({
-      where: {
-        type: { in: ['photo', 'gif', 'video'] },
-        // Only fetch items that have never been attempted (null) — '{}' sentinel means already tried
-        imageTags: null,
-        ...(cursor ? { id: { gt: cursor } } : {}),
-      },
-      orderBy: { id: 'asc' },
-      take: CHUNK,
-      select: { id: true, bookmarkId: true, url: true, thumbnailUrl: true, type: true },
-    })
+    const conditions = [
+      inArray(mediaItems.type, ['photo', 'gif', 'video']),
+      isNull(mediaItems.imageTags),
+      cursor ? gt(mediaItems.id, cursor) : undefined,
+    ].filter(Boolean)
+
+    const untagged = await db
+      .select({
+        id: mediaItems.id,
+        bookmarkId: mediaItems.bookmarkId,
+        url: mediaItems.url,
+        thumbnailUrl: mediaItems.thumbnailUrl,
+        type: mediaItems.type,
+      })
+      .from(mediaItems)
+      .where(and(...conditions))
+      .orderBy(asc(mediaItems.id))
+      .limit(CHUNK)
 
     if (untagged.length === 0) break
 
@@ -362,8 +389,8 @@ export interface EnrichmentResult {
   companies: string[]
 }
 
-function buildEnrichmentPrompt(bookmarks: BookmarkForEnrichment[]): string {
-  const items = bookmarks.map((b) => {
+function buildEnrichmentPrompt(bmarks: BookmarkForEnrichment[]): string {
+  const items = bmarks.map((b) => {
     const entry: Record<string, unknown> = { id: b.id, text: b.text.slice(0, 500) }
     const imgCtx = b.imageTags.map((raw) => buildImageContext(raw)).filter(Boolean).join(' | ')
     if (imgCtx) entry.imageContext = imgCtx
@@ -395,12 +422,12 @@ ${JSON.stringify(items, null, 1)}`
 }
 
 export async function enrichBatchSemanticTags(
-  bookmarks: BookmarkForEnrichment[],
+  bmarks: BookmarkForEnrichment[],
   client: AIClient | null,
 ): Promise<EnrichmentResult[]> {
-  if (bookmarks.length === 0) return []
+  if (bmarks.length === 0) return []
 
-  const prompt = buildEnrichmentPrompt(bookmarks)
+  const prompt = buildEnrichmentPrompt(bmarks)
 
   // Helper to parse enrichment response
   const parseResponse = (text: string): EnrichmentResult[] => {
@@ -456,7 +483,7 @@ export async function enrichAllBookmarks(
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
-  const prisma = getDb()
+  const db = getDb()
   const CHUNK = ENRICH_BATCH_SIZE * ENRICH_CONCURRENCY * 2 // fetch ahead of processing
   let enriched = 0
   let cursor: string | undefined
@@ -464,19 +491,21 @@ export async function enrichAllBookmarks(
   while (true) {
     if (shouldAbort?.()) break
 
-    const rows = await prisma.bookmark.findMany({
-      where: {
-        semanticTags: null,
-        ...(cursor ? { id: { gt: cursor } } : {}),
-      },
-      orderBy: { id: 'asc' },
-      take: CHUNK,
-      select: {
+    const conditions = [
+      isNull(bookmarks.semanticTags),
+      cursor ? gt(bookmarks.id, cursor) : undefined,
+    ].filter(Boolean)
+
+    const rows = await db.query.bookmarks.findMany({
+      where: conditions.length > 1 ? and(...conditions) : conditions[0],
+      orderBy: asc(bookmarks.id),
+      limit: CHUNK,
+      columns: {
         id: true,
         text: true,
         entities: true,
-        mediaItems: { select: { imageTags: true } },
       },
+      with: { mediaItems: { columns: { imageTags: true } } },
     })
 
     if (rows.length === 0) break
@@ -487,11 +516,11 @@ export async function enrichAllBookmarks(
     const toEnrich: BookmarkForEnrichment[] = []
 
     for (const b of rows) {
-      const imageTags = b.mediaItems
+      const imgTags = b.mediaItems
         .map((m) => m.imageTags)
         .filter((t): t is string => t !== null && t !== '' && t !== '{}')
 
-      if (imageTags.length === 0 && b.text.length < 20) {
+      if (imgTags.length === 0 && b.text.length < 20) {
         trivialIds.push(b.id)
         continue
       }
@@ -501,15 +530,15 @@ export async function enrichAllBookmarks(
         try { entities = JSON.parse(b.entities) as typeof entities } catch { /* ignore */ }
       }
 
-      toEnrich.push({ id: b.id, text: b.text, imageTags, entities })
+      toEnrich.push({ id: b.id, text: b.text, imageTags: imgTags, entities })
     }
 
     // Mark trivial bookmarks in one batch
     if (trivialIds.length > 0) {
-      await prisma.bookmark.updateMany({
-        where: { id: { in: trivialIds } },
-        data: { semanticTags: '[]' },
-      })
+      await db
+        .update(bookmarks)
+        .set({ semanticTags: '[]' })
+        .where(inArray(bookmarks.id, trivialIds))
     }
 
     // Split into batches and process with concurrency
@@ -527,17 +556,17 @@ export async function enrichAllBookmarks(
       for (const b of batch) {
         const result = resultMap.get(b.id)
         if (result?.tags.length) {
-          await prisma.bookmark.update({
-            where: { id: b.id },
-            data: {
+          await db
+            .update(bookmarks)
+            .set({
               semanticTags: JSON.stringify(result.tags),
               enrichmentMeta: JSON.stringify({
                 sentiment: result.sentiment,
                 people: result.people,
                 companies: result.companies,
               }),
-            },
-          })
+            })
+            .where(eq(bookmarks.id, b.id))
           enriched++
           onProgress?.(enriched)
         }
@@ -565,7 +594,7 @@ export async function enrichBookmarkSemanticTags(
   client: AIClient,
   entities?: BookmarkForEnrichment['entities'],
 ): Promise<string[]> {
-  const prisma = getDb()
+  const db = getDb()
   const results = await enrichBatchSemanticTags(
     [{ id: bookmarkId, text: tweetText, imageTags, entities }],
     client,
@@ -573,16 +602,16 @@ export async function enrichBookmarkSemanticTags(
   const result = results[0]
   if (!result?.tags.length) return []
 
-  await prisma.bookmark.update({
-    where: { id: bookmarkId },
-    data: {
+  await db
+    .update(bookmarks)
+    .set({
       semanticTags: JSON.stringify(result.tags),
       enrichmentMeta: JSON.stringify({
         sentiment: result.sentiment,
         people: result.people,
         companies: result.companies,
       }),
-    },
-  })
+    })
+    .where(eq(bookmarks.id, bookmarkId))
   return result.tags
 }

@@ -1,7 +1,10 @@
+import { eq, and, gt, isNull, inArray, count as countFn, asc } from 'drizzle-orm'
 import { getD1, getDb } from '@/lib/db'
+import { bookmarks, categories, bookmarkCategories, mediaItems } from '@/lib/schema'
 import { buildImageContext } from '@/lib/image-context'
 import { getActiveModel, getProvider } from '@/lib/settings'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
+import { settings } from '@/lib/schema'
 
 const BATCH_SIZE = 20
 
@@ -134,25 +137,27 @@ interface CategorizationResult {
 }
 
 export async function seedDefaultCategories(): Promise<void> {
-  const prisma = getDb()
-  const existing = await prisma.category.findMany({ select: { slug: true } })
+  const db = getDb()
+  const existing = await db
+    .select({ slug: categories.slug })
+    .from(categories)
   const existingSlugs = new Set(existing.map((c) => c.slug))
 
   for (const cat of DEFAULT_CATEGORIES) {
     if (existingSlugs.has(cat.slug)) {
       // Sync name, color, and description so renames/updates propagate to existing DBs
-      await prisma.category.update({
-        where: { slug: cat.slug },
-        data: { name: cat.name, color: cat.color, description: cat.description },
-      })
+      await db
+        .update(categories)
+        .set({ name: cat.name, color: cat.color, description: cat.description })
+        .where(eq(categories.slug, cat.slug))
     } else {
-      await prisma.category.create({ data: { ...cat } })
+      await db.insert(categories).values({ ...cat })
     }
   }
 }
 
 function buildCategorizationPrompt(
-  bookmarks: BookmarkForCategorization[],
+  bmarks: BookmarkForCategorization[],
   categoryDescriptions: Record<string, string>,
   allSlugs: string[],
 ): string {
@@ -160,7 +165,7 @@ function buildCategorizationPrompt(
     (slug) => `- ${slug}: ${categoryDescriptions[slug] ?? slug.replace(/-/g, ' ')}`,
   ).join('\n')
 
-  const tweetData = bookmarks.map((b) => {
+  const tweetData = bmarks.map((b) => {
     const entry: Record<string, unknown> = { id: b.tweetId, text: b.text.slice(0, 400) }
     const imgCtx = buildImageContext(b.imageTags)
     if (imgCtx) entry.images = imgCtx
@@ -230,14 +235,14 @@ function parseCategorizationResponse(text: string, validSlugs: Set<string>): Cat
 }
 
 export async function categorizeBatch(
-  bookmarks: BookmarkForCategorization[],
+  bmarks: BookmarkForCategorization[],
   client: AIClient | null,
   categoryDescriptions: Record<string, string> = {},
-  allSlugs: string[] = DEFAULT_SLUGS,
+  allSlugs: string[] = DEFAULT_SLUGS as unknown as string[],
 ): Promise<CategorizationResult[]> {
-  if (bookmarks.length === 0) return []
+  if (bmarks.length === 0) return []
 
-  const prompt = buildCategorizationPrompt(bookmarks, categoryDescriptions, allSlugs)
+  const prompt = buildCategorizationPrompt(bmarks, categoryDescriptions, allSlugs)
 
   if (!client) {
     throw new Error('No API key configured. Add your key in Settings.')
@@ -264,19 +269,19 @@ export async function writeCategoryResults(results: CategorizationResult[]): Pro
   const db = getDb()
 
   // Batch-fetch all categories and bookmarks at once (eliminates N+1 queries)
-  const [categories, bookmarks] = await Promise.all([
-    db.category.findMany({ select: { id: true, slug: true } }),
-    db.bookmark.findMany({
-      where: { tweetId: { in: tweetIds } },
-      select: { id: true, tweetId: true },
-    }),
+  const [allCategories, allBookmarks] = await Promise.all([
+    db.select({ id: categories.id, slug: categories.slug }).from(categories),
+    db
+      .select({ id: bookmarks.id, tweetId: bookmarks.tweetId })
+      .from(bookmarks)
+      .where(inArray(bookmarks.tweetId, tweetIds)),
   ])
 
-  const categoryBySlug = new Map(categories.map((c) => [c.slug, c.id]))
-  const bookmarkByTweetId = new Map(bookmarks.map((b) => [b.tweetId, b.id]))
+  const categoryBySlug = new Map(allCategories.map((c) => [c.slug, c.id]))
+  const bookmarkByTweetId = new Map(allBookmarks.map((b) => [b.tweetId, b.id]))
   const now = new Date().toISOString()
 
-  // Build D1 batch statements instead of Prisma $transaction
+  // Build D1 batch statements instead of Drizzle $transaction
   const d1 = getD1()
   const stmts: D1PreparedStatement[] = []
   const bookmarkIdsToUpdate: string[] = []
@@ -360,7 +365,6 @@ export const BOOKMARK_SELECT = {
   text: true,
   semanticTags: true,
   entities: true,
-  mediaItems: { select: { imageTags: true } },
 } as const
 
 export async function categorizeAll(
@@ -371,16 +375,22 @@ export async function categorizeAll(
 ): Promise<void> {
   await seedDefaultCategories()
 
-  const prisma = getDb()
+  const db = getDb()
 
   // Resolve auth once — avoids re-resolving inside every batch call
   const provider = await getProvider()
   const keyName = provider === 'openai' ? 'openaiApiKey' : 'anthropicApiKey'
-  const apiKeySetting = await prisma.setting.findUnique({ where: { key: keyName } })
-  const client = await resolveAIClient({ dbKey: apiKeySetting?.value })
+  const apiKeyRows = await db
+    .select()
+    .from(settings)
+    .where(eq(settings.key, keyName))
+    .limit(1)
+  const client = await resolveAIClient({ dbKey: apiKeyRows[0]?.value })
 
   // Load ALL categories (default + custom) for the prompt
-  const dbCategories = await prisma.category.findMany({ select: { slug: true, name: true, description: true } })
+  const dbCategories = await db
+    .select({ slug: categories.slug, name: categories.name, description: categories.description })
+    .from(categories)
   const allSlugs = dbCategories.map((c) => c.slug)
   const categoryDescriptions = Object.fromEntries(
     dbCategories.map((c) => [c.slug, c.description?.trim() || c.name]),
@@ -391,9 +401,14 @@ export async function categorizeAll(
   if (bookmarkIds.length > 0) {
     total = bookmarkIds.length
   } else if (force) {
-    total = await prisma.bookmark.count()
+    const [row] = await db.select({ count: countFn() }).from(bookmarks)
+    total = row.count
   } else {
-    total = await prisma.bookmark.count({ where: { enrichedAt: null } })
+    const [row] = await db
+      .select({ count: countFn() })
+      .from(bookmarks)
+      .where(isNull(bookmarks.enrichedAt))
+    total = row.count
   }
 
   let done = 0
@@ -403,9 +418,10 @@ export async function categorizeAll(
     for (let i = 0; i < bookmarkIds.length; i += BATCH_SIZE) {
       if (shouldAbort?.()) break
       const batchIds = bookmarkIds.slice(i, i + BATCH_SIZE)
-      const rows = await prisma.bookmark.findMany({
-        where: { id: { in: batchIds } },
-        select: BOOKMARK_SELECT,
+      const rows = await db.query.bookmarks.findMany({
+        where: inArray(bookmarks.id, batchIds),
+        columns: BOOKMARK_SELECT,
+        with: { mediaItems: { columns: { imageTags: true } } },
       })
       const batch = rows.map(mapBookmarkForCategorization)
       try {
@@ -420,16 +436,22 @@ export async function categorizeAll(
   } else {
     // Cursor-based pagination — never loads all bookmarks into memory
     let cursor: string | undefined
-    const where = force ? {} : { enrichedAt: null }
+    const whereConditions = force ? undefined : isNull(bookmarks.enrichedAt)
 
     while (true) {
       if (shouldAbort?.()) break
 
-      const rows = await prisma.bookmark.findMany({
-        where: { ...where, ...(cursor ? { id: { gt: cursor } } : {}) },
-        orderBy: { id: 'asc' },
-        take: BATCH_SIZE,
-        select: BOOKMARK_SELECT,
+      const conditions = [
+        whereConditions,
+        cursor ? gt(bookmarks.id, cursor) : undefined,
+      ].filter(Boolean)
+
+      const rows = await db.query.bookmarks.findMany({
+        where: conditions.length > 1 ? and(...conditions) : conditions[0],
+        orderBy: asc(bookmarks.id),
+        limit: BATCH_SIZE,
+        columns: BOOKMARK_SELECT,
+        with: { mediaItems: { columns: { imageTags: true } } },
       })
 
       if (rows.length === 0) break

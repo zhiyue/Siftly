@@ -1,16 +1,16 @@
-import { PrismaD1 } from '@prisma/adapter-d1'
-import { PrismaClient } from '@/app/generated/prisma/client'
+import { drizzle } from 'drizzle-orm/d1'
 import { getCloudflareContext } from '@opennextjs/cloudflare'
+import * as schema from './schema'
+
+export type Database = ReturnType<typeof drizzle<typeof schema>>
 
 /**
- * Returns a PrismaClient backed by Cloudflare D1.
+ * Returns a Drizzle ORM instance backed by Cloudflare D1.
  * Must only be called inside request handlers (not at module top-level).
  */
-export function getDb(): PrismaClient {
+export function getDb(): Database {
   const { env } = getCloudflareContext()
-  return new PrismaClient({
-    adapter: new PrismaD1(env.DB),
-  })
+  return drizzle(env.DB, { schema })
 }
 
 /**

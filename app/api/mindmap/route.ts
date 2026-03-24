@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { eq, desc, count as countFn } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks, categories, bookmarkCategories } from '@/lib/schema'
 
 interface MindMapNode {
   id: string
@@ -24,8 +26,6 @@ interface MindMapResponse {
 const ROOT_POSITION = { x: 0, y: 0 }
 const TWEET_RADIUS = 200
 
-// Keep category nodes equidistant: radius scales with count so the gap between
-// node edges stays constant (~36px) regardless of how many categories exist.
 const CAT_NODE_DIAMETER = 112
 const CAT_NODE_GAP = 36
 const CAT_MIN_RADIUS = 200
@@ -44,27 +44,34 @@ function categoryPosition(index: number, total: number, radius: number): { x: nu
 }
 
 function tweetPosition(
-  categoryPosition: { x: number; y: number },
+  catPos: { x: number; y: number },
   index: number,
   total: number
 ): { x: number; y: number } {
   const angle = (2 * Math.PI * index) / Math.max(total, 1) - Math.PI / 2
   return {
-    x: Math.round(categoryPosition.x + TWEET_RADIUS * Math.cos(angle)),
-    y: Math.round(categoryPosition.y + TWEET_RADIUS * Math.sin(angle)),
+    x: Math.round(catPos.x + TWEET_RADIUS * Math.cos(angle)),
+    y: Math.round(catPos.y + TWEET_RADIUS * Math.sin(angle)),
   }
 }
 
 async function getBaseGraph(): Promise<MindMapResponse> {
-  const prisma = getDb()
-  const [totalBookmarks, categories] = await Promise.all([
-    prisma.bookmark.count(),
-    prisma.category.findMany({
-      include: {
-        _count: { select: { bookmarks: true } },
-      },
-      orderBy: { bookmarks: { _count: 'desc' } },
-    }),
+  const db = getDb()
+  const [[{ count: totalBookmarks }], catRows] = await Promise.all([
+    db.select({ count: countFn() }).from(bookmarks),
+    db
+      .select({
+        id: categories.id,
+        name: categories.name,
+        slug: categories.slug,
+        color: categories.color,
+        description: categories.description,
+        count: countFn(),
+      })
+      .from(categories)
+      .leftJoin(bookmarkCategories, eq(categories.id, bookmarkCategories.categoryId))
+      .groupBy(categories.id)
+      .orderBy(desc(countFn())),
   ])
 
   const rootNode: MindMapNode = {
@@ -74,21 +81,21 @@ async function getBaseGraph(): Promise<MindMapResponse> {
     position: ROOT_POSITION,
   }
 
-  const radius = categoryRadius(categories.length)
-  const categoryNodes: MindMapNode[] = categories.map((cat, index) => ({
+  const radius = categoryRadius(catRows.length)
+  const categoryNodes: MindMapNode[] = catRows.map((cat, index) => ({
     id: `cat-${cat.slug}`,
     type: 'category',
     data: {
       name: cat.name,
       slug: cat.slug,
       color: cat.color,
-      count: cat._count.bookmarks,
+      count: cat.count,
       description: cat.description,
     },
-    position: categoryPosition(index, categories.length, radius),
+    position: categoryPosition(index, catRows.length, radius),
   }))
 
-  const categoryEdges: MindMapEdge[] = categories.map((cat) => ({
+  const categoryEdges: MindMapEdge[] = catRows.map((cat) => ({
     id: `edge-root-cat-${cat.slug}`,
     source: 'root',
     target: `cat-${cat.slug}`,
@@ -103,24 +110,25 @@ async function getBaseGraph(): Promise<MindMapResponse> {
 }
 
 async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapResponse> {
-  const prisma = getDb()
-  const category = await prisma.category.findUnique({
-    where: { slug: categorySlug },
-    include: {
-      _count: { select: { bookmarks: true } },
-    },
-  })
+  const db = getDb()
+  const categoryRow = await db
+    .select()
+    .from(categories)
+    .where(eq(categories.slug, categorySlug))
+    .limit(1)
 
-  if (!category) {
+  if (categoryRow.length === 0) {
     return { nodes: [], edges: [] }
   }
+  const category = categoryRow[0]
 
-  const bookmarkCategories = await prisma.bookmarkCategory.findMany({
-    where: { category: { slug: categorySlug } },
-    select: {
-      confidence: true,
+  const bcRows = await db.query.bookmarkCategories.findMany({
+    where: eq(bookmarkCategories.categoryId, category.id),
+    orderBy: desc(bookmarkCategories.confidence),
+    limit: 66,
+    with: {
       bookmark: {
-        select: {
+        columns: {
           id: true,
           tweetId: true,
           text: true,
@@ -128,23 +136,23 @@ async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapRespo
           authorName: true,
           tweetCreatedAt: true,
           semanticTags: true,
+        },
+        with: {
           mediaItems: {
-            select: { url: true, thumbnailUrl: true, type: true, imageTags: true },
-            take: 1,
+            columns: { url: true, thumbnailUrl: true, type: true, imageTags: true },
+            limit: 1,
           },
         },
       },
     },
-    orderBy: [{ confidence: 'desc' }],
-    take: 66, // Max nodes across 4 rings (8+14+20+24)
   })
 
-  const bookmarks = bookmarkCategories.map((bc) => ({ ...bc.bookmark, confidence: bc.confidence }))
+  const bmItems = bcRows.map((bc) => ({ ...bc.bookmark, confidence: bc.confidence }))
 
   const catNodeId = `cat-${categorySlug}`
-  const catPos = { x: 0, y: 0 } // Position relative to the category
+  const catPos = { x: 0, y: 0 }
 
-  const tweetNodes: MindMapNode[] = bookmarks.map((bookmark, index) => {
+  const tweetNodes: MindMapNode[] = bmItems.map((bookmark, index) => {
     const truncatedText =
       bookmark.text.length > 80
         ? bookmark.text.slice(0, 77) + '...'
@@ -153,7 +161,6 @@ async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapRespo
     const firstMedia = bookmark.mediaItems[0] ?? null
     const thumbnailUrl = firstMedia?.thumbnailUrl ?? (firstMedia?.type === 'photo' ? firstMedia.url : null) ?? null
 
-    // Extract a brief visual summary from structured imageTags for tooltip
     let visualSummary: string | null = null
     if (firstMedia?.imageTags) {
       try {
@@ -176,16 +183,16 @@ async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapRespo
         thumbnailUrl,
         hasMedia: firstMedia !== null,
         mediaType: firstMedia?.type ?? null,
-        tweetCreatedAt: bookmark.tweetCreatedAt?.toISOString() ?? null,
+        tweetCreatedAt: bookmark.tweetCreatedAt ?? null,
         categoryColor: category.color,
         confidence: bookmark.confidence,
         visualSummary,
       },
-      position: tweetPosition(catPos, index, bookmarks.length),
+      position: tweetPosition(catPos, index, bmItems.length),
     }
   })
 
-  const tweetEdges: MindMapEdge[] = bookmarks.map((bookmark) => ({
+  const tweetEdges: MindMapEdge[] = bmItems.map((bookmark) => ({
     id: `edge-${catNodeId}-tweet-${bookmark.tweetId}`,
     source: catNodeId,
     target: `tweet-${bookmark.tweetId}`,

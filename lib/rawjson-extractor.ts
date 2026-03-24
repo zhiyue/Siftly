@@ -2,7 +2,9 @@
  * Zero-cost entity extraction from stored rawJson tweet data.
  * No AI calls — pure data mining from already-stored JSON.
  */
+import { eq, isNull } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks } from '@/lib/schema'
 
 export interface ExtractedEntities {
   hashtags: string[]
@@ -257,31 +259,31 @@ export async function backfillEntities(
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
-  const prisma = getDb()
+  const db = getDb()
   const CHUNK = 100
   let total = 0
 
   while (true) {
     if (shouldAbort?.()) break
-    const bookmarks = await prisma.bookmark.findMany({
-      where: { entities: null },
-      take: CHUNK,
-      select: { id: true, rawJson: true },
-    })
+    const rows = await db
+      .select({ id: bookmarks.id, rawJson: bookmarks.rawJson })
+      .from(bookmarks)
+      .where(isNull(bookmarks.entities))
+      .limit(CHUNK)
 
-    if (bookmarks.length === 0) break
+    if (rows.length === 0) break
 
-    for (const b of bookmarks) {
+    for (const b of rows) {
       const entities = extractEntities(b.rawJson)
-      await prisma.bookmark.update({
-        where: { id: b.id },
-        data: { entities: JSON.stringify(entities) },
-      })
+      await db
+        .update(bookmarks)
+        .set({ entities: JSON.stringify(entities) })
+        .where(eq(bookmarks.id, b.id))
       total++
       onProgress?.(total)
     }
 
-    if (bookmarks.length < CHUNK) break
+    if (rows.length < CHUNK) break
   }
 
   return total

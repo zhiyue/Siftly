@@ -1,5 +1,7 @@
 import JSZip from 'jszip'
+import { eq, desc, inArray } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks, categories, bookmarkCategories, mediaItems } from '@/lib/schema'
 
 interface BookmarkRow {
   id: string
@@ -8,8 +10,8 @@ interface BookmarkRow {
   authorHandle: string
   authorName: string
   source: string
-  tweetCreatedAt: Date | null
-  importedAt: Date
+  tweetCreatedAt: string | null
+  importedAt: string
   mediaItems: MediaItemRow[]
   categories: CategoryJoin[]
 }
@@ -30,18 +32,61 @@ interface CategoryJoin {
   }
 }
 
-async function fetchBookmarksFull(where?: object): Promise<BookmarkRow[]> {
-  const prisma = getDb()
-  return prisma.bookmark.findMany({
-    where,
-    include: {
+async function fetchBookmarksFull(bookmarkIds?: string[]): Promise<BookmarkRow[]> {
+  const db = getDb()
+  const rows = await db.query.bookmarks.findMany({
+    where: bookmarkIds && bookmarkIds.length > 0
+      ? inArray(bookmarks.id, bookmarkIds)
+      : undefined,
+    orderBy: desc(bookmarks.importedAt),
+    with: {
       mediaItems: true,
       categories: {
-        include: { category: true },
+        with: { category: true },
       },
     },
-    orderBy: { importedAt: 'desc' },
-  }) as Promise<BookmarkRow[]>
+  })
+
+  return rows.map((b) => ({
+    id: b.id,
+    tweetId: b.tweetId,
+    text: b.text,
+    authorHandle: b.authorHandle,
+    authorName: b.authorName,
+    source: b.source,
+    tweetCreatedAt: b.tweetCreatedAt,
+    importedAt: b.importedAt,
+    mediaItems: b.mediaItems.map((m) => ({
+      id: m.id,
+      type: m.type,
+      url: m.url,
+      thumbnailUrl: m.thumbnailUrl,
+      localPath: m.localPath,
+    })),
+    categories: b.categories.map((bc) => ({
+      category: {
+        name: bc.category.name,
+        slug: bc.category.slug,
+        color: bc.category.color,
+      },
+    })),
+  }))
+}
+
+async function fetchBookmarksForCategory(categorySlug: string): Promise<BookmarkRow[]> {
+  const db = getDb()
+
+  // First, get the bookmark IDs in this category
+  const bcRows = await db
+    .select({ bookmarkId: bookmarkCategories.bookmarkId })
+    .from(bookmarkCategories)
+    .innerJoin(categories, eq(bookmarkCategories.categoryId, categories.id))
+    .where(eq(categories.slug, categorySlug))
+
+  const ids = bcRows.map((r) => r.bookmarkId)
+  if (ids.length === 0) return []
+
+  return fetchBookmarksFull(ids)
 }
 
 function formatCsvField(value: string): string {
@@ -88,20 +133,18 @@ function mediaExtension(type: string, url: string): string {
 }
 
 export async function exportCategoryAsZip(categorySlug: string): Promise<Uint8Array> {
-  const prisma = getDb()
-  const category = await prisma.category.findUnique({
-    where: { slug: categorySlug },
-  })
+  const db = getDb()
+  const categoryRow = await db
+    .select()
+    .from(categories)
+    .where(eq(categories.slug, categorySlug))
+    .limit(1)
 
-  if (!category) {
+  if (categoryRow.length === 0) {
     throw new Error(`Category not found: ${categorySlug}`)
   }
 
-  const bookmarks = await fetchBookmarksFull({
-    categories: {
-      some: { category: { slug: categorySlug } },
-    },
-  })
+  const bookmarkRows = await fetchBookmarksForCategory(categorySlug)
 
   const zip = new JSZip()
   const mediaFolder = zip.folder('media')
@@ -111,10 +154,10 @@ export async function exportCategoryAsZip(categorySlug: string): Promise<Uint8Ar
   ]
 
   let mediaIndex = 0
-  for (const bookmark of bookmarks) {
+  for (const bookmark of bookmarkRows) {
     const tweetUrl = `https://twitter.com/${bookmark.authorHandle}/status/${bookmark.tweetId}`
     const categoryNames = bookmark.categories.map((c) => c.category.name).join('; ')
-    const dateStr = bookmark.tweetCreatedAt?.toISOString() ?? ''
+    const dateStr = bookmark.tweetCreatedAt ?? ''
 
     manifestRows.push(
       buildCsvRow([
@@ -146,7 +189,7 @@ export async function exportCategoryAsZip(categorySlug: string): Promise<Uint8Ar
 }
 
 export async function exportAllBookmarksCsv(): Promise<string> {
-  const bookmarks = await fetchBookmarksFull()
+  const bookmarkRows = await fetchBookmarksFull()
 
   const headers = buildCsvRow([
     'tweetId',
@@ -158,17 +201,17 @@ export async function exportAllBookmarksCsv(): Promise<string> {
     'mediaUrls',
   ])
 
-  const rows = bookmarks.map((bookmark) => {
-    const categories = bookmark.categories.map((c) => c.category.name).join('; ')
+  const rows = bookmarkRows.map((bookmark) => {
+    const cats = bookmark.categories.map((c) => c.category.name).join('; ')
     const mediaUrls = bookmark.mediaItems.map((m) => m.url).join('; ')
-    const dateStr = bookmark.tweetCreatedAt?.toISOString() ?? ''
+    const dateStr = bookmark.tweetCreatedAt ?? ''
 
     return buildCsvRow([
       bookmark.tweetId,
       bookmark.text,
       bookmark.authorHandle,
       bookmark.source,
-      categories,
+      cats,
       dateStr,
       mediaUrls,
     ])
@@ -178,20 +221,16 @@ export async function exportAllBookmarksCsv(): Promise<string> {
 }
 
 export async function exportBookmarksJson(bookmarkIds?: string[]): Promise<string> {
-  const where = bookmarkIds && bookmarkIds.length > 0
-    ? { id: { in: bookmarkIds } }
-    : undefined
+  const bookmarkRows = await fetchBookmarksFull(bookmarkIds)
 
-  const bookmarks = await fetchBookmarksFull(where)
-
-  const output = bookmarks.map((bookmark) => ({
+  const output = bookmarkRows.map((bookmark) => ({
     tweetId: bookmark.tweetId,
     text: bookmark.text,
     authorHandle: bookmark.authorHandle,
     authorName: bookmark.authorName,
     source: bookmark.source,
-    tweetCreatedAt: bookmark.tweetCreatedAt?.toISOString() ?? null,
-    importedAt: bookmark.importedAt.toISOString(),
+    tweetCreatedAt: bookmark.tweetCreatedAt ?? null,
+    importedAt: bookmark.importedAt,
     categories: bookmark.categories.map((c) => ({
       name: c.category.name,
       slug: c.category.slug,

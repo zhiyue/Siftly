@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { eq, desc, inArray } from 'drizzle-orm'
+import { getDb, getD1 } from '@/lib/db'
+import { bookmarks, categories, settings } from '@/lib/schema'
 import { ftsSearch } from '@/lib/fts'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 import { getActiveModel, getProvider } from '@/lib/settings'
@@ -29,19 +31,21 @@ let _categoriesCacheExpiry = 0
 
 async function getDbApiKey(): Promise<string> {
   if (_apiKey !== null && Date.now() < _apiKeyExpiry) return _apiKey
-  const prisma = getDb()
+  const db = getDb()
   const provider = await getProvider()
   const keyName = provider === 'openai' ? 'openaiApiKey' : 'anthropicApiKey'
-  const setting = await prisma.setting.findUnique({ where: { key: keyName } })
-  const fromDb = setting?.value?.trim() ?? ''
+  const rows = await db.select().from(settings).where(eq(settings.key, keyName)).limit(1)
+  const fromDb = rows[0]?.value?.trim() ?? ''
   _apiKey = fromDb
   _apiKeyExpiry = Date.now() + 60_000
   return _apiKey
 }
 async function getAllCategories() {
   if (_categoriesCache && Date.now() < _categoriesCacheExpiry) return _categoriesCache
-  const prisma = getDb()
-  _categoriesCache = await prisma.category.findMany({ select: { slug: true, name: true, description: true } })
+  const db = getDb()
+  _categoriesCache = await db
+    .select({ slug: categories.slug, name: categories.name, description: categories.description })
+    .from(categories)
   _categoriesCacheExpiry = Date.now() + 2 * 60 * 1000
   return _categoriesCache
 }
@@ -120,10 +124,8 @@ function buildIndexEntry(b: {
 }): string {
   const lines: string[] = [`[${b.id}]`]
 
-  // Text — more generous limit for complex queries
   lines.push(`text: ${b.text.slice(0, 350)}`)
 
-  // Image/media context — rich structured data
   for (const m of b.mediaItems) {
     if (!m.imageTags || m.imageTags === '{}') {
       lines.push(`media: [${m.type}]`)
@@ -151,7 +153,6 @@ function buildIndexEntry(b: {
     }
   }
 
-  // AI semantic tags — full set
   if (b.semanticTags && b.semanticTags !== '[]') {
     try {
       const tags = JSON.parse(b.semanticTags) as string[]
@@ -159,7 +160,6 @@ function buildIndexEntry(b: {
     } catch { /* ignore */ }
   }
 
-  // Hashtags + tool mentions
   if (b.entities) {
     try {
       const ent = JSON.parse(b.entities) as { hashtags?: string[]; tools?: string[]; mentions?: string[] }
@@ -171,7 +171,6 @@ function buildIndexEntry(b: {
     } catch { /* ignore */ }
   }
 
-  // Categories with confidence
   if (b.categories.length) {
     const cats = b.categories
       .filter((c) => c.confidence >= 0.5)
@@ -190,7 +189,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const prisma = getDb()
+  const db = getDb()
+  const d1 = getD1()
   const { query, category } = body
   if (!query?.trim()) return NextResponse.json({ error: 'Query required' }, { status: 400 })
 
@@ -208,99 +208,119 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   const model = await getActiveModel()
 
-  const categoryFilter = category
-    ? { categories: { some: { category: { slug: category } } } }
-    : {}
-
   // ── Step 1: Smart candidate selection ─────────────────────────────────────
   const keywords = extractKeywords(query)
   const intentSlugs = category ? [] : await detectIntentCategories(query)
-  const MAX_CANDIDATES = 150 // smaller, richer set beats larger, noisier set
+  const MAX_CANDIDATES = 150
 
-  const selectShape = {
-    id: true, tweetId: true, text: true, authorHandle: true, authorName: true,
-    tweetCreatedAt: true, importedAt: true, semanticTags: true, entities: true,
-    mediaItems: { select: { id: true, type: true, url: true, thumbnailUrl: true, imageTags: true } },
-    categories: {
-      include: { category: { select: { id: true, name: true, slug: true, color: true } } },
-      orderBy: { confidence: 'desc' as const },
-    },
-  } as const
+  // Build category filter for raw SQL
+  let categoryFilterSql = ''
+  const categoryFilterParams: string[] = []
+  if (category) {
+    categoryFilterSql = 'AND b.id IN (SELECT bc.bookmarkId FROM BookmarkCategory bc JOIN Category c ON bc.categoryId = c.id WHERE c.slug = ?)'
+    categoryFilterParams.push(category)
+  }
 
   // Try FTS5 first (fast, ranked by relevance); fall back to LIKE on error/empty
   const ftsIds = keywords.length > 0 ? await ftsSearch(keywords) : []
   const useFts = ftsIds.length > 0
 
-  // Build LIKE-based fallback conditions (used when FTS5 is empty/unavailable)
-  const keywordConditions = keywords.flatMap((kw) => [
-    { text: { contains: kw } },
-    { semanticTags: { contains: kw } },
-    { entities: { contains: kw } },
-    { mediaItems: { some: { imageTags: { contains: kw } } } },
-  ])
-
-  // Run keyword-filtered and category-intent queries in parallel
-  const [keywordHits, intentHits] = await Promise.all([
-    keywords.length > 0
-      ? prisma.bookmark.findMany({
-          where: {
-            ...categoryFilter,
-            ...(useFts
-              ? { id: { in: ftsIds } }
-              : { OR: keywordConditions }),
-          },
-          // FTS results are pre-ranked; LIKE results fall back to recency ordering
-          orderBy: useFts ? undefined : [{ enrichedAt: 'desc' }, { tweetCreatedAt: 'desc' }],
-          take: MAX_CANDIDATES,
-          select: selectShape,
-        })
-      : prisma.bookmark.findMany({ where: { id: 'never' }, select: selectShape }),
-
-    intentSlugs.length > 0
-      ? prisma.bookmark.findMany({
-          where: {
-            ...categoryFilter,
-            categories: { some: { category: { slug: { in: intentSlugs } } } },
-          },
-          orderBy: [{ enrichedAt: 'desc' }, { tweetCreatedAt: 'desc' }],
-          take: 80,
-          select: selectShape,
-        })
-      : prisma.bookmark.findMany({ where: { id: 'never' }, select: selectShape }),
-  ])
-
-  // Merge: keyword hits first (more specific), then intent hits, dedup by id
-  const seen = new Set<string>()
-  const merged: typeof keywordHits = []
-  for (const b of [...keywordHits, ...intentHits]) {
-    if (!seen.has(b.id)) { seen.add(b.id); merged.push(b) }
-  }
-
-  // If still very few candidates, pull a recent sample so Claude has something to work with
-  let bookmarks = merged
-  if (bookmarks.length < 20) {
-    const fallback = await prisma.bookmark.findMany({
-      where: categoryFilter,
-      orderBy: [{ enrichedAt: 'desc' }, { tweetCreatedAt: 'desc' }],
-      take: MAX_CANDIDATES,
-      select: selectShape,
-    })
-    const fallbackSeen = new Set(bookmarks.map((b) => b.id))
-    for (const b of fallback) {
-      if (!fallbackSeen.has(b.id)) { fallbackSeen.add(b.id); bookmarks.push(b) }
+  // Fetch keyword hits
+  let keywordHitIds: string[] = []
+  if (keywords.length > 0) {
+    if (useFts) {
+      // Filter FTS IDs by category if needed
+      if (category && ftsIds.length > 0) {
+        const placeholders = ftsIds.map(() => '?').join(', ')
+        const result = await d1
+          .prepare(
+            `SELECT b.id FROM Bookmark b WHERE b.id IN (${placeholders}) ${categoryFilterSql} LIMIT ?`
+          )
+          .bind(...ftsIds, ...categoryFilterParams, MAX_CANDIDATES)
+          .all<{ id: string }>()
+        keywordHitIds = result.results.map((r) => r.id)
+      } else {
+        keywordHitIds = ftsIds.slice(0, MAX_CANDIDATES)
+      }
+    } else {
+      // LIKE-based fallback
+      const likeConditions = keywords.map(() =>
+        '(b.text LIKE ? OR b.semanticTags LIKE ? OR b.entities LIKE ?)'
+      ).join(' OR ')
+      const likeParams = keywords.flatMap((kw) => [`%${kw}%`, `%${kw}%`, `%${kw}%`])
+      const result = await d1
+        .prepare(
+          `SELECT b.id FROM Bookmark b WHERE (${likeConditions}) ${categoryFilterSql} ORDER BY b.enrichedAt DESC, b.tweetCreatedAt DESC LIMIT ?`
+        )
+        .bind(...likeParams, ...categoryFilterParams, MAX_CANDIDATES)
+        .all<{ id: string }>()
+      keywordHitIds = result.results.map((r) => r.id)
     }
-    // Cap total
-    bookmarks = bookmarks.slice(0, MAX_CANDIDATES)
   }
 
-  if (bookmarks.length === 0) {
+  // Fetch intent hits
+  let intentHitIds: string[] = []
+  if (intentSlugs.length > 0) {
+    const slugPlaceholders = intentSlugs.map(() => '?').join(', ')
+    const result = await d1
+      .prepare(
+        `SELECT b.id FROM Bookmark b WHERE b.id IN (SELECT bc.bookmarkId FROM BookmarkCategory bc JOIN Category c ON bc.categoryId = c.id WHERE c.slug IN (${slugPlaceholders})) ${categoryFilterSql} ORDER BY b.enrichedAt DESC, b.tweetCreatedAt DESC LIMIT 80`
+      )
+      .bind(...intentSlugs, ...categoryFilterParams)
+      .all<{ id: string }>()
+    intentHitIds = result.results.map((r) => r.id)
+  }
+
+  // Merge and dedup
+  const seen = new Set<string>()
+  const mergedIds: string[] = []
+  for (const id of [...keywordHitIds, ...intentHitIds]) {
+    if (!seen.has(id)) { seen.add(id); mergedIds.push(id) }
+  }
+
+  // If still very few candidates, pull a recent sample
+  let allIds = mergedIds
+  if (allIds.length < 20) {
+    const fallbackResult = await d1
+      .prepare(
+        `SELECT b.id FROM Bookmark b WHERE 1=1 ${categoryFilterSql} ORDER BY b.enrichedAt DESC, b.tweetCreatedAt DESC LIMIT ?`
+      )
+      .bind(...categoryFilterParams, MAX_CANDIDATES)
+      .all<{ id: string }>()
+    const fallbackSeen = new Set(allIds)
+    for (const r of fallbackResult.results) {
+      if (!fallbackSeen.has(r.id)) { fallbackSeen.add(r.id); allIds.push(r.id) }
+    }
+    allIds = allIds.slice(0, MAX_CANDIDATES)
+  }
+
+  if (allIds.length === 0) {
+    return NextResponse.json({ bookmarks: [], explanation: 'No bookmarks found.' })
+  }
+
+  // Hydrate with full relational data
+  const bookmarkRows = await db.query.bookmarks.findMany({
+    where: inArray(bookmarks.id, allIds),
+    columns: {
+      id: true, tweetId: true, text: true, authorHandle: true, authorName: true,
+      tweetCreatedAt: true, importedAt: true, semanticTags: true, entities: true,
+    },
+    with: {
+      mediaItems: { columns: { id: true, type: true, url: true, thumbnailUrl: true, imageTags: true } },
+      categories: {
+        with: { category: { columns: { id: true, name: true, slug: true, color: true } } },
+      },
+    },
+  })
+
+  if (bookmarkRows.length === 0) {
     return NextResponse.json({ bookmarks: [], explanation: 'No bookmarks found.' })
   }
 
   // ── Step 2: Build rich search index ───────────────────────────────────────
-  const indexEntries = bookmarks.map(buildIndexEntry)
+  const indexEntries = bookmarkRows.map(buildIndexEntry)
 
-  // ── Step 3: Compose a better prompt ───────────────────────────────────────
+  // ── Step 3: Compose prompt ─────────────────────────────────────────────────
   const prompt = `You are an expert semantic search engine for a personal Twitter/X bookmark knowledge base. Find bookmarks that genuinely match what the user wants — even when exact words don't appear.
 
 USER QUERY: "${query}"
@@ -322,7 +342,7 @@ ai_tags: AI-generated search tags (pre-computed, highly reliable)
 #hashtags | tools: detected tools/products | @mentions
 categories: assigned categories with confidence scores
 
-BOOKMARKS (${bookmarks.length} total):
+BOOKMARKS (${bookmarkRows.length} total):
 ${indexEntries.join('\n---\n')}
 
 Return ONLY valid JSON — no markdown, no prose outside the JSON object:
@@ -365,7 +385,7 @@ Constraints:
   }
 
   // ── Step 4: Hydrate results ────────────────────────────────────────────────
-  const bookmarkById = new Map(bookmarks.map((b) => [b.id, b]))
+  const bookmarkById = new Map(bookmarkRows.map((b) => [b.id, b]))
   const matchMap = new Map(aiResponse.matches.map((m) => [m.id, m]))
 
   const results = aiResponse.matches
@@ -379,8 +399,8 @@ Constraints:
         text: b.text,
         authorHandle: b.authorHandle,
         authorName: b.authorName,
-        tweetCreatedAt: b.tweetCreatedAt?.toISOString() ?? null,
-        importedAt: b.importedAt.toISOString(),
+        tweetCreatedAt: b.tweetCreatedAt ?? null,
+        importedAt: b.importedAt,
         mediaItems: b.mediaItems.map((m) => ({
           id: m.id, type: m.type, url: m.url, thumbnailUrl: m.thumbnailUrl, imageTags: m.imageTags ?? null,
         })),
@@ -394,7 +414,7 @@ Constraints:
     })
     .filter(Boolean)
 
-  const response = { bookmarks: results, explanation: aiResponse.explanation }
-  setCache(cacheKey, response)
-  return NextResponse.json(response)
+  const responseData = { bookmarks: results, explanation: aiResponse.explanation }
+  setCache(cacheKey, responseData)
+  return NextResponse.json(responseData)
 }

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { eq } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks, mediaItems } from '@/lib/schema'
 
 const ALLOWED_ORIGINS = new Set(['https://x.com', 'https://twitter.com'])
 
@@ -122,7 +124,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'No tweets provided' }, { status: 400, headers: cors })
   }
 
-  const prisma = getDb()
+  const db = getDb()
   let imported = 0
   let skipped = 0
 
@@ -133,12 +135,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     if (!tweet.rest_id) continue
 
-    const exists = await prisma.bookmark.findUnique({
-      where: { tweetId: tweet.rest_id },
-      select: { id: true },
-    })
+    const existing = await db
+      .select({ id: bookmarks.id })
+      .from(bookmarks)
+      .where(eq(bookmarks.tweetId, tweet.rest_id))
+      .limit(1)
 
-    if (exists) {
+    if (existing.length > 0) {
       skipped++
       continue
     }
@@ -146,29 +149,30 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const userLegacy = tweet.core?.user_results?.result?.legacy ?? {}
     const media = extractMedia(tweet)
 
-    const created = await prisma.bookmark.create({
-      data: {
+    const created = await db
+      .insert(bookmarks)
+      .values({
         tweetId: tweet.rest_id,
         text: tweetFullText(tweet),
         authorHandle: userLegacy.screen_name ?? 'unknown',
         authorName: userLegacy.name ?? 'Unknown',
         tweetCreatedAt: tweet.legacy?.created_at
-          ? new Date(tweet.legacy.created_at)
+          ? new Date(tweet.legacy.created_at).toISOString()
           : null,
         rawJson: JSON.stringify(tweet),
         source,
-      },
-    })
+      })
+      .returning({ id: bookmarks.id })
 
     if (media.length > 0) {
-      await prisma.mediaItem.createMany({
-        data: media.map((m) => ({
-          bookmarkId: created.id,
+      await db.insert(mediaItems).values(
+        media.map((m) => ({
+          bookmarkId: created[0].id,
           type: m.type,
           url: m.url,
           thumbnailUrl: m.thumbnailUrl ?? null,
         })),
-      })
+      )
     }
 
     imported++

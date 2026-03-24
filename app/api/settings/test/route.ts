@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { eq } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { settings } from '@/lib/schema'
 import { resolveAnthropicClient } from '@/lib/claude-cli-auth'
 import { resolveOpenAIClient } from '@/lib/openai-auth'
 
@@ -14,11 +16,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const provider = body.provider ?? 'anthropic'
 
-  const prisma = getDb()
+  const db = getDb()
 
   if (provider === 'anthropic') {
-    const setting = await prisma.setting.findUnique({ where: { key: 'anthropicApiKey' } })
-    const dbKey = setting?.value?.trim()
+    const rows = await db.select().from(settings).where(eq(settings.key, 'anthropicApiKey')).limit(1)
+    const dbKey = rows[0]?.value?.trim()
 
     let client
     try {
@@ -46,8 +48,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   if (provider === 'openai') {
-    const setting = await prisma.setting.findUnique({ where: { key: 'openaiApiKey' } })
-    const dbKey = setting?.value?.trim()
+    const rows = await db.select().from(settings).where(eq(settings.key, 'openaiApiKey')).limit(1)
+    const dbKey = rows[0]?.value?.trim()
 
     let client
     try {

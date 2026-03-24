@@ -1,4 +1,6 @@
+import { eq } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { settings } from '@/lib/schema'
 
 // Module-level caches — avoids hundreds of DB roundtrips per pipeline run
 let _cachedModel: string | null = null
@@ -17,9 +19,13 @@ const CACHE_TTL = 5 * 60 * 1000
  */
 export async function getAnthropicModel(): Promise<string> {
   if (_cachedModel && Date.now() < _modelCacheExpiry) return _cachedModel
-  const prisma = getDb()
-  const setting = await prisma.setting.findUnique({ where: { key: 'anthropicModel' } })
-  _cachedModel = setting?.value ?? 'claude-haiku-4-5-20251001'
+  const db = getDb()
+  const rows = await db
+    .select()
+    .from(settings)
+    .where(eq(settings.key, 'anthropicModel'))
+    .limit(1)
+  _cachedModel = rows[0]?.value ?? 'claude-haiku-4-5-20251001'
   _modelCacheExpiry = Date.now() + CACHE_TTL
   return _cachedModel
 }
@@ -29,9 +35,13 @@ export async function getAnthropicModel(): Promise<string> {
  */
 export async function getProvider(): Promise<'anthropic' | 'openai'> {
   if (_cachedProvider && Date.now() < _providerCacheExpiry) return _cachedProvider
-  const prisma = getDb()
-  const setting = await prisma.setting.findUnique({ where: { key: 'aiProvider' } })
-  _cachedProvider = setting?.value === 'openai' ? 'openai' : 'anthropic'
+  const db = getDb()
+  const rows = await db
+    .select()
+    .from(settings)
+    .where(eq(settings.key, 'aiProvider'))
+    .limit(1)
+  _cachedProvider = rows[0]?.value === 'openai' ? 'openai' : 'anthropic'
   _providerCacheExpiry = Date.now() + CACHE_TTL
   return _cachedProvider
 }
@@ -41,9 +51,13 @@ export async function getProvider(): Promise<'anthropic' | 'openai'> {
  */
 export async function getOpenAIModel(): Promise<string> {
   if (_cachedOpenAIModel && Date.now() < _openAIModelCacheExpiry) return _cachedOpenAIModel
-  const prisma = getDb()
-  const setting = await prisma.setting.findUnique({ where: { key: 'openaiModel' } })
-  _cachedOpenAIModel = setting?.value ?? 'gpt-4.1-mini'
+  const db = getDb()
+  const rows = await db
+    .select()
+    .from(settings)
+    .where(eq(settings.key, 'openaiModel'))
+    .limit(1)
+  _cachedOpenAIModel = rows[0]?.value ?? 'gpt-4.1-mini'
   _openAIModelCacheExpiry = Date.now() + CACHE_TTL
   return _cachedOpenAIModel
 }

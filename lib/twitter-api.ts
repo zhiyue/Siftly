@@ -1,4 +1,6 @@
+import { eq } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks, mediaItems } from '@/lib/schema'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -237,7 +239,7 @@ export function tweetFullText(tweet: TweetResult): string {
 export async function importTweets(
   tweets: TweetResult[],
 ): Promise<{ imported: number; skipped: number }> {
-  const prisma = getDb()
+  const db = getDb()
   let imported = 0
   let skipped = 0
 
@@ -245,12 +247,13 @@ export async function importTweets(
     if (!tweet.rest_id) continue
 
     try {
-      const exists = await prisma.bookmark.findUnique({
-        where: { tweetId: tweet.rest_id },
-        select: { id: true },
-      })
+      const existing = await db
+        .select({ id: bookmarks.id })
+        .from(bookmarks)
+        .where(eq(bookmarks.tweetId, tweet.rest_id))
+        .limit(1)
 
-      if (exists) {
+      if (existing.length > 0) {
         skipped++
         continue
       }
@@ -259,32 +262,35 @@ export async function importTweets(
       const userLegacy = tweet.core?.user_results?.result?.legacy ?? {}
 
       const rawDate = tweet.legacy?.created_at
-      let parsedDate: Date | null = null
+      let parsedDate: string | null = null
       if (rawDate) {
         const d = new Date(rawDate)
-        if (!isNaN(d.getTime())) parsedDate = d
+        if (!isNaN(d.getTime())) parsedDate = d.toISOString()
       }
 
-      const created = await prisma.bookmark.create({
-        data: {
+      const inserted = await db
+        .insert(bookmarks)
+        .values({
           tweetId: tweet.rest_id,
           text: tweetFullText(tweet),
           authorHandle: userLegacy.screen_name ?? 'unknown',
           authorName: userLegacy.name ?? 'Unknown',
           tweetCreatedAt: parsedDate,
           rawJson: JSON.stringify(tweet),
-        },
-      })
+        })
+        .returning({ id: bookmarks.id })
+
+      const createdId = inserted[0].id
 
       if (media.length > 0) {
-        await prisma.mediaItem.createMany({
-          data: media.map((m) => ({
-            bookmarkId: created.id,
+        await db.insert(mediaItems).values(
+          media.map((m) => ({
+            bookmarkId: createdId,
             type: m.type,
             url: m.url,
             thumbnailUrl: m.thumbnailUrl ?? null,
           })),
-        })
+        )
       }
 
       imported++

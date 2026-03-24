@@ -2,47 +2,81 @@ export const dynamic = 'force-dynamic'
 
 import Link from 'next/link'
 import { BookmarkIcon, Tag, Image, Layers, Upload, Sparkles, Search, ArrowRight, TrendingUp, Bookmark } from 'lucide-react'
+import { eq, desc, count as countFn, isNull } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks, categories, bookmarkCategories, mediaItems } from '@/lib/schema'
 import BookmarkCard from '@/components/bookmark-card'
 import type { BookmarkWithMedia } from '@/lib/types'
 
-const RECENT_QUERY = {
-  take: 6,
-  orderBy: [{ tweetCreatedAt: 'desc' as const }, { importedAt: 'desc' as const }],
-  include: {
-    mediaItems: { select: { id: true, type: true, url: true, thumbnailUrl: true } },
-    categories: {
-      include: {
-        category: { select: { id: true, name: true, slug: true, color: true } },
+async function queryDashboard() {
+  const db = getDb()
+  const [[{ count: totalBookmarks }], [{ count: totalCategories }], [{ count: totalMedia }]] =
+    await Promise.all([
+      db.select({ count: countFn() }).from(bookmarks),
+      db.select({ count: countFn() }).from(categories),
+      db.select({ count: countFn() }).from(mediaItems),
+    ])
+
+  // These need separate queries
+  const [{ count: bookmarkSourceCount }] = await db
+    .select({ count: countFn() })
+    .from(bookmarks)
+    .where(eq(bookmarks.source, 'bookmark'))
+  const [{ count: likeSourceCount }] = await db
+    .select({ count: countFn() })
+    .from(bookmarks)
+    .where(eq(bookmarks.source, 'like'))
+
+  // Uncategorized: bookmarks with no entries in BookmarkCategory
+  const [{ count: uncategorizedCount }] = await db
+    .select({ count: countFn() })
+    .from(bookmarks)
+    .where(isNull(bookmarks.enrichedAt))
+
+  const recentRaw = await db.query.bookmarks.findMany({
+    limit: 6,
+    orderBy: [desc(bookmarks.tweetCreatedAt), desc(bookmarks.importedAt)],
+    with: {
+      mediaItems: { columns: { id: true, type: true, url: true, thumbnailUrl: true } },
+      categories: {
+        with: {
+          category: { columns: { id: true, name: true, slug: true, color: true } },
+        },
       },
     },
-  },
+  })
+
+  const catsRaw = await db
+    .select({
+      name: categories.name,
+      slug: categories.slug,
+      color: categories.color,
+      count: countFn(),
+    })
+    .from(categories)
+    .leftJoin(bookmarkCategories, eq(categories.id, bookmarkCategories.categoryId))
+    .groupBy(categories.id)
+    .orderBy(desc(countFn()))
+    .limit(10)
+
+  return {
+    totalBookmarks,
+    totalCategories,
+    totalMedia,
+    bookmarkSourceCount,
+    likeSourceCount,
+    uncategorizedCount,
+    recentRaw,
+    catsRaw,
+  }
 }
 
-const TOP_CATS_QUERY = {
-  include: { _count: { select: { bookmarks: true } } },
-  orderBy: { bookmarks: { _count: 'desc' as const } },
-  take: 10,
-} as const
-
-async function queryDashboard() {
-  const prisma = getDb()
-  return Promise.all([
-    prisma.bookmark.count(),
-    prisma.category.count(),
-    prisma.mediaItem.count(),
-    prisma.bookmark.count({ where: { categories: { none: {} } } }),
-    prisma.bookmark.findMany(RECENT_QUERY),
-    prisma.category.findMany(TOP_CATS_QUERY),
-    prisma.bookmark.count({ where: { source: 'bookmark' } }),
-    prisma.bookmark.count({ where: { source: 'like' } }),
-  ])
-}
-
-type QueryResult = Awaited<ReturnType<typeof queryDashboard>>
-
-function buildDashboardData(result: QueryResult) {
-  const [totalBookmarks, totalCategories, totalMedia, uncategorizedCount, recentRaw, catsRaw, bookmarkSourceCount, likeSourceCount] = result
+function buildDashboardData(result: Awaited<ReturnType<typeof queryDashboard>>) {
+  const {
+    totalBookmarks, totalCategories, totalMedia,
+    bookmarkSourceCount, likeSourceCount, uncategorizedCount,
+    recentRaw, catsRaw,
+  } = result
 
   const recentBookmarks: BookmarkWithMedia[] = recentRaw.map((b) => ({
     id: b.id,
@@ -50,8 +84,8 @@ function buildDashboardData(result: QueryResult) {
     text: b.text,
     authorHandle: b.authorHandle,
     authorName: b.authorName,
-    tweetCreatedAt: b.tweetCreatedAt?.toISOString() ?? null,
-    importedAt: b.importedAt.toISOString(),
+    tweetCreatedAt: b.tweetCreatedAt ?? null,
+    importedAt: b.importedAt,
     mediaItems: b.mediaItems,
     categories: b.categories.map((bc) => ({
       id: bc.category.id,
@@ -74,7 +108,7 @@ function buildDashboardData(result: QueryResult) {
       name: c.name,
       slug: c.slug,
       color: c.color,
-      count: c._count.bookmarks,
+      count: c.count,
     })),
   }
 }

@@ -2,12 +2,14 @@
  * SQLite FTS5 virtual table for fast full-text search across bookmarks.
  * FTS5 uses Porter stemming and tokenization — much faster than LIKE '%keyword%' table scans.
  *
- * Uses D1 binding directly (not Prisma) because D1 doesn't support $executeRawUnsafe / $queryRaw.
- * The table is rebuilt after enrichment runs. At search time it provides ranked ID lists
- * that replace the LIKE-based keyword conditions in the search route.
+ * Uses D1 binding directly (not Drizzle) because FTS5 virtual tables are not supported
+ * by Drizzle's schema API. The table is rebuilt after enrichment runs. At search time it
+ * provides ranked ID lists that replace the LIKE-based keyword conditions in the search route.
  */
 
+import { gt, asc } from 'drizzle-orm'
 import { getD1, getDb } from '@/lib/db'
+import { bookmarks } from '@/lib/schema'
 
 const FTS_TABLE = 'bookmark_fts'
 
@@ -31,43 +33,43 @@ export async function ensureFtsTable(): Promise<void> {
  * Call after import or enrichment runs.
  */
 export async function rebuildFts(): Promise<void> {
-  const db = getD1()
-  const prisma = getDb()
+  const d1 = getD1()
+  const db = getDb()
   await ensureFtsTable()
-  await db.prepare(`DELETE FROM ${FTS_TABLE}`).run()
+  await d1.prepare(`DELETE FROM ${FTS_TABLE}`).run()
 
   // D1 batch() limit is ~100 statements per call
   const PAGE_SIZE = 100
   let cursor: string | undefined
 
   while (true) {
-    const bookmarks = await prisma.bookmark.findMany({
-      take: PAGE_SIZE,
-      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
-      orderBy: { id: 'asc' },
-      select: {
+    const rows = await db.query.bookmarks.findMany({
+      where: cursor ? gt(bookmarks.id, cursor) : undefined,
+      orderBy: asc(bookmarks.id),
+      limit: PAGE_SIZE,
+      columns: {
         id: true,
         text: true,
         semanticTags: true,
         entities: true,
-        mediaItems: { select: { imageTags: true } },
       },
+      with: { mediaItems: { columns: { imageTags: true } } },
     })
 
-    if (bookmarks.length === 0) break
+    if (rows.length === 0) break
 
-    const stmts = bookmarks.map((b) => {
+    const stmts = rows.map((b) => {
       const imageTagsText = b.mediaItems
         .map((m) => m.imageTags ?? '')
         .filter(Boolean)
         .join(' ')
-      return db.prepare(
+      return d1.prepare(
         `INSERT INTO ${FTS_TABLE}(bookmark_id, text, semantic_tags, entities, image_tags) VALUES (?, ?, ?, ?, ?)`
       ).bind(b.id, b.text, b.semanticTags ?? '', b.entities ?? '', imageTagsText)
     })
 
-    await db.batch(stmts)
-    cursor = bookmarks[bookmarks.length - 1].id
+    await d1.batch(stmts)
+    cursor = rows[rows.length - 1].id
   }
 }
 

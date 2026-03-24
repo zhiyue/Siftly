@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { eq } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarkCategories } from '@/lib/schema'
 
 // PUT: Replace all categories for a bookmark
 export async function PUT(
@@ -17,19 +19,19 @@ export async function PUT(
   const { categoryIds = [] } = body
 
   try {
-    const prisma = getDb()
+    const db = getDb()
     // Delete existing categories
-    await prisma.bookmarkCategory.deleteMany({ where: { bookmarkId: id } })
+    await db.delete(bookmarkCategories).where(eq(bookmarkCategories.bookmarkId, id))
 
     // Insert new categories
     if (categoryIds.length > 0) {
-      await prisma.bookmarkCategory.createMany({
-        data: categoryIds.map((categoryId) => ({
+      await db.insert(bookmarkCategories).values(
+        categoryIds.map((categoryId) => ({
           bookmarkId: id,
           categoryId,
           confidence: 1.0,
         })),
-      })
+      )
     }
 
     return NextResponse.json({ success: true })

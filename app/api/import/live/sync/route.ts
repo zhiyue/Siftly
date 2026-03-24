@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
+import { eq } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { settings } from '@/lib/schema'
 import { syncBookmarks, isSyncing } from '@/lib/x-sync'
 
 /** POST — trigger a manual sync using stored credentials */
@@ -9,20 +11,20 @@ export async function POST() {
   }
 
   try {
-    const prisma = getDb()
-    const [authSetting, ct0Setting] = await Promise.all([
-      prisma.setting.findUnique({ where: { key: 'x_auth_token' } }),
-      prisma.setting.findUnique({ where: { key: 'x_ct0' } }),
+    const db = getDb()
+    const [authRows, ct0Rows] = await Promise.all([
+      db.select().from(settings).where(eq(settings.key, 'x_auth_token')).limit(1),
+      db.select().from(settings).where(eq(settings.key, 'x_ct0')).limit(1),
     ])
 
-    if (!authSetting?.value || !ct0Setting?.value) {
+    if (!authRows[0]?.value || !ct0Rows[0]?.value) {
       return NextResponse.json(
         { error: 'X credentials not configured. Save your auth_token and ct0 first.' },
         { status: 400 },
       )
     }
 
-    const result = await syncBookmarks(authSetting.value, ct0Setting.value)
+    const result = await syncBookmarks(authRows[0].value, ct0Rows[0].value)
     return NextResponse.json(result)
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Sync failed'

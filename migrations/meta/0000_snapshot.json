@@ -1,0 +1,480 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "b6012182-df52-419b-9148-065c7295b377",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "tables": {
+    "BookmarkCategory": {
+      "name": "BookmarkCategory",
+      "columns": {
+        "bookmarkId": {
+          "name": "bookmarkId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "categoryId": {
+          "name": "categoryId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "BookmarkCategory_bookmarkId_Bookmark_id_fk": {
+          "name": "BookmarkCategory_bookmarkId_Bookmark_id_fk",
+          "tableFrom": "BookmarkCategory",
+          "tableTo": "Bookmark",
+          "columnsFrom": [
+            "bookmarkId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "BookmarkCategory_categoryId_Category_id_fk": {
+          "name": "BookmarkCategory_categoryId_Category_id_fk",
+          "tableFrom": "BookmarkCategory",
+          "tableTo": "Category",
+          "columnsFrom": [
+            "categoryId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "BookmarkCategory_bookmarkId_categoryId_pk": {
+          "columns": [
+            "bookmarkId",
+            "categoryId"
+          ],
+          "name": "BookmarkCategory_bookmarkId_categoryId_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "Bookmark": {
+      "name": "Bookmark",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tweetId": {
+          "name": "tweetId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "text": {
+          "name": "text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authorHandle": {
+          "name": "authorHandle",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authorName": {
+          "name": "authorName",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tweetCreatedAt": {
+          "name": "tweetCreatedAt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "importedAt": {
+          "name": "importedAt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rawJson": {
+          "name": "rawJson",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "semanticTags": {
+          "name": "semanticTags",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "entities": {
+          "name": "entities",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enrichedAt": {
+          "name": "enrichedAt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enrichmentMeta": {
+          "name": "enrichmentMeta",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'bookmark'"
+        }
+      },
+      "indexes": {
+        "Bookmark_tweetId_unique": {
+          "name": "Bookmark_tweetId_unique",
+          "columns": [
+            "tweetId"
+          ],
+          "isUnique": true
+        },
+        "Bookmark_authorHandle_idx": {
+          "name": "Bookmark_authorHandle_idx",
+          "columns": [
+            "authorHandle"
+          ],
+          "isUnique": false
+        },
+        "Bookmark_tweetCreatedAt_idx": {
+          "name": "Bookmark_tweetCreatedAt_idx",
+          "columns": [
+            "tweetCreatedAt"
+          ],
+          "isUnique": false
+        },
+        "Bookmark_enrichedAt_idx": {
+          "name": "Bookmark_enrichedAt_idx",
+          "columns": [
+            "enrichedAt"
+          ],
+          "isUnique": false
+        },
+        "Bookmark_source_idx": {
+          "name": "Bookmark_source_idx",
+          "columns": [
+            "source"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "Category": {
+      "name": "Category",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "color": {
+          "name": "color",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'#6366f1'"
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "isAiGenerated": {
+          "name": "isAiGenerated",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "Category_name_unique": {
+          "name": "Category_name_unique",
+          "columns": [
+            "name"
+          ],
+          "isUnique": true
+        },
+        "Category_slug_unique": {
+          "name": "Category_slug_unique",
+          "columns": [
+            "slug"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ImportJob": {
+      "name": "ImportJob",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "filename": {
+          "name": "filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "totalCount": {
+          "name": "totalCount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "processedCount": {
+          "name": "processedCount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "errorMessage": {
+          "name": "errorMessage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "MediaItem": {
+      "name": "MediaItem",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "bookmarkId": {
+          "name": "bookmarkId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "thumbnailUrl": {
+          "name": "thumbnailUrl",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "localPath": {
+          "name": "localPath",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "imageTags": {
+          "name": "imageTags",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "MediaItem_bookmarkId_idx": {
+          "name": "MediaItem_bookmarkId_idx",
+          "columns": [
+            "bookmarkId"
+          ],
+          "isUnique": false
+        },
+        "MediaItem_url_idx": {
+          "name": "MediaItem_url_idx",
+          "columns": [
+            "url"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "MediaItem_bookmarkId_Bookmark_id_fk": {
+          "name": "MediaItem_bookmarkId_Bookmark_id_fk",
+          "tableFrom": "MediaItem",
+          "tableTo": "Bookmark",
+          "columnsFrom": [
+            "bookmarkId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "Setting": {
+      "name": "Setting",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value": {
+          "name": "value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

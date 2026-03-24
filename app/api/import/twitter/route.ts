@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { eq } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { bookmarks, mediaItems } from '@/lib/schema'
 
 const BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I%2BxMb1nYFAA%3DUognEfK4ZPxYowpr4nMskopkC%2FDO'
 
@@ -25,11 +27,6 @@ const FEATURES = JSON.stringify({
   responsive_web_enhance_cards_enabled: false,
 })
 
-// Query IDs for Twitter's internal GraphQL endpoints
-// These can change when Twitter deploys updates — update if you get 400 errors
-//
-// To find the Likes query ID: open x.com/<username>/likes with DevTools Network tab,
-// filter by "graphql", find the "Likes" request, and grab the ID from the URL path.
 const ENDPOINTS = {
   bookmark: {
     queryId: 'j5KExFXy1niL_uGnBhHNxA',
@@ -40,7 +37,6 @@ const ENDPOINTS = {
       (d as any)?.data?.bookmark_timeline_v2?.timeline?.instructions ?? [],
   },
   like: {
-    // PLACEHOLDER — you must replace this with the real query ID from x.com Network tab
     queryId: 'REPLACE_ME',
     operationName: 'Likes',
     referer: 'https://x.com',
@@ -90,7 +86,6 @@ interface ArticleResult {
   preview_image?: { url?: string }
   cover_media?: { media_info?: { original_img_url?: string } }
   content?: string
-  // Some X article payloads include a Draft.js-like content_state
   content_state?: { blocks?: ArticleBlock[] }
 }
 
@@ -201,13 +196,10 @@ function tweetFullText(tweet: TweetResult): string {
     const parts: string[] = []
     if (article.title) parts.push(article.title)
     if (article.content) parts.push(article.content)
-
-    // Fallback: some X articles ship content in content_state.blocks
     if (parts.length === 0) {
       const blocks = articleBlocksText(article)
       if (blocks) parts.push(blocks)
     }
-
     if (parts.length > 0) return decodeHtmlEntities(parts.join('\n\n'))
   }
   return decodeHtmlEntities(tweet.legacy?.full_text ?? '')
@@ -262,7 +254,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'userId is required for importing likes' }, { status: 400 })
   }
 
-  const prisma = getDb()
+  const db = getDb()
   let imported = 0
   let skipped = 0
   let cursor: string | undefined
@@ -275,12 +267,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       for (const tweet of tweets) {
         if (!tweet.rest_id) continue
 
-        const exists = await prisma.bookmark.findUnique({
-          where: { tweetId: tweet.rest_id },
-          select: { id: true },
-        })
+        const existing = await db
+          .select({ id: bookmarks.id })
+          .from(bookmarks)
+          .where(eq(bookmarks.tweetId, tweet.rest_id))
+          .limit(1)
 
-        if (exists) {
+        if (existing.length > 0) {
           skipped++
           continue
         }
@@ -288,29 +281,30 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         const media = extractMedia(tweet)
         const userLegacy = tweet.core?.user_results?.result?.legacy ?? {}
 
-        const created = await prisma.bookmark.create({
-          data: {
+        const created = await db
+          .insert(bookmarks)
+          .values({
             tweetId: tweet.rest_id,
             text: tweetFullText(tweet),
             authorHandle: userLegacy.screen_name ?? 'unknown',
             authorName: userLegacy.name ?? 'Unknown',
             tweetCreatedAt: tweet.legacy?.created_at
-              ? new Date(tweet.legacy.created_at)
+              ? new Date(tweet.legacy.created_at).toISOString()
               : null,
             rawJson: JSON.stringify(tweet),
             source,
-          },
-        })
+          })
+          .returning({ id: bookmarks.id })
 
         if (media.length > 0) {
-          await prisma.mediaItem.createMany({
-            data: media.map((m) => ({
-              bookmarkId: created.id,
+          await db.insert(mediaItems).values(
+            media.map((m) => ({
+              bookmarkId: created[0].id,
               type: m.type,
               url: m.url,
               thumbnailUrl: m.thumbnailUrl ?? null,
             })),
-          })
+          )
         }
 
         imported++

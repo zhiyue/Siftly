@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { eq, or, asc, count as countFn, desc } from 'drizzle-orm'
 import { getDb } from '@/lib/db'
+import { categories, bookmarkCategories } from '@/lib/schema'
 import { seedDefaultCategories } from '@/lib/categorizer'
 
 function generateSlug(name: string): string {
@@ -14,29 +16,36 @@ function generateSlug(name: string): string {
 
 export async function GET(): Promise<NextResponse> {
   try {
-    const prisma = getDb()
+    const db = getDb()
     // Seed defaults on first load so the nav always has categories
-    const count = await prisma.category.count()
-    if (count === 0) await seedDefaultCategories()
+    const [{ count: catCount }] = await db.select({ count: countFn() }).from(categories)
+    if (catCount === 0) await seedDefaultCategories()
 
-    const categories = await prisma.category.findMany({
-      orderBy: { name: 'asc' },
-      include: {
-        _count: {
-          select: { bookmarks: true },
-        },
-      },
-    })
+    const rows = await db
+      .select({
+        id: categories.id,
+        name: categories.name,
+        slug: categories.slug,
+        color: categories.color,
+        description: categories.description,
+        isAiGenerated: categories.isAiGenerated,
+        createdAt: categories.createdAt,
+        bookmarkCount: countFn(),
+      })
+      .from(categories)
+      .leftJoin(bookmarkCategories, eq(categories.id, bookmarkCategories.categoryId))
+      .groupBy(categories.id)
+      .orderBy(asc(categories.name))
 
-    const formatted = categories.map((cat) => ({
+    const formatted = rows.map((cat) => ({
       id: cat.id,
       name: cat.name,
       slug: cat.slug,
       color: cat.color,
       description: cat.description,
       isAiGenerated: cat.isAiGenerated,
-      createdAt: cat.createdAt.toISOString(),
-      bookmarkCount: cat._count.bookmarks,
+      createdAt: cat.createdAt,
+      bookmarkCount: cat.bookmarkCount,
     }))
 
     return NextResponse.json({ categories: formatted })
@@ -82,28 +91,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       : '#6366f1'
 
   try {
-    const prisma = getDb()
-    const existing = await prisma.category.findFirst({
-      where: { OR: [{ name: trimmedName }, { slug }] },
-      select: { id: true },
-    })
+    const db = getDb()
+    const existing = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(or(eq(categories.name, trimmedName), eq(categories.slug, slug)))
+      .limit(1)
 
-    if (existing) {
+    if (existing.length > 0) {
       return NextResponse.json(
         { error: `Category with that name or slug already exists` },
         { status: 409 }
       )
     }
 
-    const category = await prisma.category.create({
-      data: {
+    const inserted = await db
+      .insert(categories)
+      .values({
         name: trimmedName,
         slug,
         color: validColor,
         description: description?.trim() ?? null,
         isAiGenerated: false,
-      },
-    })
+      })
+      .returning()
+
+    const category = inserted[0]
 
     return NextResponse.json(
       {
@@ -114,7 +127,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           color: category.color,
           description: category.description,
           isAiGenerated: category.isAiGenerated,
-          createdAt: category.createdAt.toISOString(),
+          createdAt: category.createdAt,
           bookmarkCount: 0,
         },
       },
