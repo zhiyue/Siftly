@@ -30,17 +30,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const setting = await prisma.setting.findUnique({ where: { key: keyName } })
   const dbKey = setting?.value?.trim()
 
-  let client: AIClient | null = null
+  let client: AIClient
   try {
     client = await resolveAIClient({ dbKey })
-  } catch {
-    // SDK not available — will use CLI path for vision
+  } catch (err) {
+    return NextResponse.json(
+      { error: `No API key available: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 400 }
+    )
   }
 
   return runAnalysis(client, batchSize)
 }
 
-async function runAnalysis(client: AIClient | null, batchSize: number): Promise<NextResponse> {
+async function runAnalysis(client: AIClient, batchSize: number): Promise<NextResponse> {
   const prisma = getDb()
   const untagged = await prisma.mediaItem.findMany({
     where: { imageTags: null, type: { in: ['photo', 'gif'] } },
