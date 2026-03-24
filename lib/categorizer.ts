@@ -1,4 +1,4 @@
-import prisma from '@/lib/db'
+import prisma, { getD1, getDb } from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
 import { getActiveModel, getProvider } from '@/lib/settings'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
@@ -260,10 +260,12 @@ export async function writeCategoryResults(results: CategorizationResult[]): Pro
   const tweetIds = results.map((r) => r.tweetId).filter(Boolean)
   if (tweetIds.length === 0) return
 
+  const db = getDb()
+
   // Batch-fetch all categories and bookmarks at once (eliminates N+1 queries)
   const [categories, bookmarks] = await Promise.all([
-    prisma.category.findMany({ select: { id: true, slug: true } }),
-    prisma.bookmark.findMany({
+    db.category.findMany({ select: { id: true, slug: true } }),
+    db.bookmark.findMany({
       where: { tweetId: { in: tweetIds } },
       select: { id: true, tweetId: true },
     }),
@@ -271,10 +273,11 @@ export async function writeCategoryResults(results: CategorizationResult[]): Pro
 
   const categoryBySlug = new Map(categories.map((c) => [c.slug, c.id]))
   const bookmarkByTweetId = new Map(bookmarks.map((b) => [b.tweetId, b.id]))
-  const now = new Date()
+  const now = new Date().toISOString()
 
-  // Collect all operations then execute in a single transaction (eliminates sequential await overhead)
-  const upsertOps: ReturnType<typeof prisma.bookmarkCategory.upsert>[] = []
+  // Build D1 batch statements instead of Prisma $transaction
+  const d1 = getD1()
+  const stmts: D1PreparedStatement[] = []
   const bookmarkIdsToUpdate: string[] = []
 
   for (const result of results) {
@@ -285,26 +288,32 @@ export async function writeCategoryResults(results: CategorizationResult[]): Pro
     for (const { category: slug, confidence } of result.assignments) {
       const categoryId = categoryBySlug.get(slug)
       if (!categoryId) continue
-      upsertOps.push(
-        prisma.bookmarkCategory.upsert({
-          where: { bookmarkId_categoryId: { bookmarkId, categoryId } },
-          update: { confidence },
-          create: { bookmarkId, categoryId, confidence },
-        }),
+      stmts.push(
+        d1.prepare(
+          'INSERT INTO BookmarkCategory (bookmarkId, categoryId, confidence) VALUES (?, ?, ?) ON CONFLICT (bookmarkId, categoryId) DO UPDATE SET confidence = ?'
+        ).bind(bookmarkId, categoryId, confidence, confidence),
       )
     }
     bookmarkIdsToUpdate.push(bookmarkId)
   }
 
-  if (upsertOps.length === 0) return
+  if (stmts.length === 0) return
 
-  await prisma.$transaction([
-    ...upsertOps,
-    prisma.bookmark.updateMany({
-      where: { id: { in: bookmarkIdsToUpdate } },
-      data: { enrichedAt: now },
-    }),
-  ])
+  // Add UPDATE statement for enrichedAt
+  if (bookmarkIdsToUpdate.length > 0) {
+    const placeholders = bookmarkIdsToUpdate.map(() => '?').join(', ')
+    stmts.push(
+      d1.prepare(
+        `UPDATE Bookmark SET enrichedAt = ? WHERE id IN (${placeholders})`
+      ).bind(now, ...bookmarkIdsToUpdate),
+    )
+  }
+
+  // D1 batch limit is ~100 statements — chunk if needed
+  const BATCH_LIMIT = 100
+  for (let i = 0; i < stmts.length; i += BATCH_LIMIT) {
+    await d1.batch(stmts.slice(i, i + BATCH_LIMIT))
+  }
 }
 
 export function mapBookmarkForCategorization(b: {

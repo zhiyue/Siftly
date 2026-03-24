@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 const DEFAULT_PAGE = 1
 const DEFAULT_LIMIT = 24
@@ -13,13 +13,12 @@ function parseIntParam(value: string | null, defaultValue: number): number {
 
 export async function DELETE(): Promise<NextResponse> {
   try {
+    const prisma = getDb()
     // Delete media items and category links first (cascade), then bookmarks
-    await prisma.$transaction([
-      prisma.bookmarkCategory.deleteMany({}),
-      prisma.mediaItem.deleteMany({}),
-      prisma.bookmark.deleteMany({}),
-      prisma.category.deleteMany({}),
-    ])
+    await prisma.bookmarkCategory.deleteMany({})
+    await prisma.mediaItem.deleteMany({})
+    await prisma.bookmark.deleteMany({})
+    await prisma.category.deleteMany({})
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('Clear bookmarks error:', err)
@@ -71,6 +70,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
+    const prisma = getDb()
     const [bookmarks, total] = await Promise.all([
       prisma.bookmark.findMany({
         where,

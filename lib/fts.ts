@@ -2,16 +2,18 @@
  * SQLite FTS5 virtual table for fast full-text search across bookmarks.
  * FTS5 uses Porter stemming and tokenization — much faster than LIKE '%keyword%' table scans.
  *
+ * Uses D1 binding directly (not Prisma) because D1 doesn't support $executeRawUnsafe / $queryRaw.
  * The table is rebuilt after enrichment runs. At search time it provides ranked ID lists
  * that replace the LIKE-based keyword conditions in the search route.
  */
 
-import prisma from '@/lib/db'
+import { getD1, getDb } from '@/lib/db'
 
 const FTS_TABLE = 'bookmark_fts'
 
 export async function ensureFtsTable(): Promise<void> {
-  await prisma.$executeRawUnsafe(`
+  const db = getD1()
+  await db.prepare(`
     CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(
       bookmark_id UNINDEXED,
       text,
@@ -20,45 +22,52 @@ export async function ensureFtsTable(): Promise<void> {
       image_tags,
       tokenize='porter unicode61'
     )
-  `)
+  `).run()
 }
 
 /**
- * Rebuild the FTS5 table from all bookmarks. Fast (local SQLite) and idempotent.
+ * Rebuild the FTS5 table from all bookmarks. Uses cursor-based pagination
+ * and D1 batch() to stay within D1's ~100 statement batch limit.
  * Call after import or enrichment runs.
  */
 export async function rebuildFts(): Promise<void> {
+  const db = getD1()
+  const prisma = getDb()
   await ensureFtsTable()
-  await prisma.$executeRawUnsafe(`DELETE FROM ${FTS_TABLE}`)
+  await db.prepare(`DELETE FROM ${FTS_TABLE}`).run()
 
-  const bookmarks = await prisma.bookmark.findMany({
-    select: {
-      id: true,
-      text: true,
-      semanticTags: true,
-      entities: true,
-      mediaItems: { select: { imageTags: true } },
-    },
-  })
+  // D1 batch() limit is ~100 statements per call
+  const PAGE_SIZE = 100
+  let cursor: string | undefined
 
-  if (bookmarks.length === 0) return
+  while (true) {
+    const bookmarks = await prisma.bookmark.findMany({
+      take: PAGE_SIZE,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        text: true,
+        semanticTags: true,
+        entities: true,
+        mediaItems: { select: { imageTags: true } },
+      },
+    })
 
-  // Insert in batches of 200 to stay within SQLite variable limits
-  const BATCH = 200
-  for (let i = 0; i < bookmarks.length; i += BATCH) {
-    const batch = bookmarks.slice(i, i + BATCH)
-    await prisma.$transaction(
-      batch.map((b) => {
-        const imageTagsText = b.mediaItems
-          .map((m) => m.imageTags ?? '')
-          .filter(Boolean)
-          .join(' ')
-        return prisma.$executeRaw`
-          INSERT INTO bookmark_fts(bookmark_id, text, semantic_tags, entities, image_tags)
-          VALUES (${b.id}, ${b.text}, ${b.semanticTags ?? ''}, ${b.entities ?? ''}, ${imageTagsText})
-        `
-      }),
-    )
+    if (bookmarks.length === 0) break
+
+    const stmts = bookmarks.map((b) => {
+      const imageTagsText = b.mediaItems
+        .map((m) => m.imageTags ?? '')
+        .filter(Boolean)
+        .join(' ')
+      return db.prepare(
+        `INSERT INTO ${FTS_TABLE}(bookmark_id, text, semantic_tags, entities, image_tags) VALUES (?, ?, ?, ?, ?)`
+      ).bind(b.id, b.text, b.semanticTags ?? '', b.entities ?? '', imageTagsText)
+    })
+
+    await db.batch(stmts)
+    cursor = bookmarks[bookmarks.length - 1].id
   }
 }
 
@@ -71,24 +80,21 @@ export async function ftsSearch(keywords: string[]): Promise<string[]> {
   if (keywords.length === 0) return []
 
   try {
+    const db = getD1()
     await ensureFtsTable()
 
-    // Sanitize each keyword: remove FTS5 special chars, wrap in quotes for phrase safety
     const terms = keywords
       .map((kw) => kw.replace(/["*()]/g, ' ').trim())
       .filter((kw) => kw.length >= 2)
 
     if (terms.length === 0) return []
 
-    // Build FTS5 MATCH query with OR between terms
     const matchQuery = terms.join(' OR ')
 
-    const results = await prisma.$queryRaw<{ bookmark_id: string }[]>`
-      SELECT bookmark_id FROM bookmark_fts
-      WHERE bookmark_fts MATCH ${matchQuery}
-      ORDER BY rank
-      LIMIT 150
-    `
+    const { results } = await db.prepare(
+      `SELECT bookmark_id FROM ${FTS_TABLE} WHERE ${FTS_TABLE} MATCH ? ORDER BY rank LIMIT 150`
+    ).bind(matchQuery).all<{ bookmark_id: string }>()
+
     return results.map((r) => r.bookmark_id)
   } catch {
     // FTS table may not be populated yet or query has syntax error — fall back gracefully
