@@ -238,14 +238,13 @@ New route `app/api/media/[key]/route.ts`:
 - `better-sqlite3` + `@types/better-sqlite3` + `@prisma/adapter-better-sqlite3`
 - All `child_process`, `fs`, `os` imports from auth code
 
-### `Buffer` Usage Replacement
+### `Buffer` and Node.js Polyfills
 
-Workers do not have Node.js `Buffer` global. All occurrences must be replaced:
+The `nodejs_compat` compatibility flag (required by OpenNext) provides Node.js built-in module polyfills including `Buffer`. Most existing `Buffer` usage works as-is without changes.
 
-- `lib/vision-analyzer.ts` `fetchImageAsBase64()`: `Buffer.from(buffer).toString('base64')` → use `btoa(String.fromCharCode(...new Uint8Array(buffer)))` or Workers-native approach
-- `lib/exporter.ts`: `Buffer.from(arrayBuffer)` and `zip.generateAsync({ type: 'nodebuffer' })` → change to `type: 'uint8array'`
-- `app/api/export/route.ts`: same JSZip `nodebuffer` issue
-- `lib/openai-auth.ts`: `Buffer.from(...)` for JWT parsing → removed with the file
+Only change: JSZip output type from `nodebuffer` to `uint8array` (more portable, avoids unnecessary conversion):
+- `lib/exporter.ts`: `zip.generateAsync({ type: 'nodebuffer' })` → `zip.generateAsync({ type: 'uint8array' })`
+- `app/api/export/route.ts`: same change
 
 ### Middleware Auth Conflict
 
