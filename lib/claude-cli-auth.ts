@@ -13,7 +13,7 @@ export function resolveAnthropicClient(options: {
   baseURL?: string
 } = {}): Anthropic {
   const { env } = getCloudflareContext()
-  const baseURL = options.baseURL || (env as Record<string, string>).ANTHROPIC_BASE_URL || undefined
+  const baseURL = options.baseURL || env.ANTHROPIC_BASE_URL || undefined
 
   if (options.overrideKey?.trim()) {
     return new Anthropic({ apiKey: options.overrideKey.trim(), ...(baseURL ? { baseURL } : {}) })
@@ -23,7 +23,7 @@ export function resolveAnthropicClient(options: {
     return new Anthropic({ apiKey: options.dbKey.trim(), ...(baseURL ? { baseURL } : {}) })
   }
 
-  const envKey = ((env as Record<string, string>).ANTHROPIC_API_KEY as string | undefined)?.trim()
+  const envKey = env.ANTHROPIC_API_KEY?.trim()
   if (envKey) {
     return new Anthropic({ apiKey: envKey, ...(baseURL ? { baseURL } : {}) })
   }

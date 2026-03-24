@@ -13,7 +13,7 @@ export function resolveOpenAIClient(options: {
   baseURL?: string
 } = {}): OpenAI {
   const { env } = getCloudflareContext()
-  const baseURL = options.baseURL || (env as Record<string, string>).OPENAI_BASE_URL || undefined
+  const baseURL = options.baseURL || env.OPENAI_BASE_URL || undefined
 
   if (options.overrideKey?.trim()) {
     return new OpenAI({ apiKey: options.overrideKey.trim(), ...(baseURL ? { baseURL } : {}) })
@@ -23,7 +23,7 @@ export function resolveOpenAIClient(options: {
     return new OpenAI({ apiKey: options.dbKey.trim(), ...(baseURL ? { baseURL } : {}) })
   }
 
-  const envKey = ((env as Record<string, string>).OPENAI_API_KEY as string | undefined)?.trim()
+  const envKey = env.OPENAI_API_KEY?.trim()
   if (envKey) {
     return new OpenAI({ apiKey: envKey, ...(baseURL ? { baseURL } : {}) })
   }
