@@ -20,15 +20,3 @@ export function getD1(): D1Database {
   const { env } = getCloudflareContext()
   return env.DB
 }
-
-// Backward-compatible default export.
-// Caches per-request to avoid creating PrismaClient on every property access.
-let _cached: PrismaClient | null = null
-
-export default new Proxy({} as PrismaClient, {
-  get(_target, prop) {
-    if (!_cached) _cached = getDb()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (_cached as any)[prop]
-  },
-})

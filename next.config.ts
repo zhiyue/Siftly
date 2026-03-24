@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
+  transpilePackages: ['@prisma/client', '@prisma/adapter-d1'],
   images: {
     remotePatterns: [
       {
