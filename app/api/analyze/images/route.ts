@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { analyzeBatch } from '@/lib/vision-analyzer'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 import { getProvider } from '@/lib/settings'
 
 // GET: returns progress stats
 export async function GET(): Promise<NextResponse> {
+  const prisma = getDb()
   const [total, tagged] = await Promise.all([
     prisma.mediaItem.count({ where: { type: { in: ['photo', 'gif'] } } }),
     prisma.mediaItem.count({ where: { type: { in: ['photo', 'gif'] }, imageTags: { not: null } } }),
@@ -23,6 +24,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // use default
   }
 
+  const prisma = getDb()
   const provider = await getProvider()
   const keyName = provider === 'openai' ? 'openaiApiKey' : 'anthropicApiKey'
   const setting = await prisma.setting.findUnique({ where: { key: keyName } })
@@ -39,6 +41,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 }
 
 async function runAnalysis(client: AIClient | null, batchSize: number): Promise<NextResponse> {
+  const prisma = getDb()
   const untagged = await prisma.mediaItem.findMany({
     where: { imageTags: null, type: { in: ['photo', 'gif'] } },
     take: batchSize,

@@ -1,5 +1,5 @@
 import JSZip from 'jszip'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 interface BookmarkRow {
   id: string
@@ -31,6 +31,7 @@ interface CategoryJoin {
 }
 
 async function fetchBookmarksFull(where?: object): Promise<BookmarkRow[]> {
+  const prisma = getDb()
   return prisma.bookmark.findMany({
     where,
     include: {
@@ -52,14 +53,14 @@ function buildCsvRow(fields: string[]): string {
   return fields.map(formatCsvField).join(',')
 }
 
-async function downloadFile(url: string): Promise<Buffer | null> {
+async function downloadFile(url: string): Promise<Uint8Array | null> {
   try {
     const response = await fetch(url, {
       signal: AbortSignal.timeout(15_000),
     })
     if (!response.ok) return null
     const arrayBuffer = await response.arrayBuffer()
-    return Buffer.from(arrayBuffer)
+    return new Uint8Array(arrayBuffer)
   } catch {
     return null
   }
@@ -86,7 +87,8 @@ function mediaExtension(type: string, url: string): string {
   return '.jpg'
 }
 
-export async function exportCategoryAsZip(categorySlug: string): Promise<Buffer> {
+export async function exportCategoryAsZip(categorySlug: string): Promise<Uint8Array> {
+  const prisma = getDb()
   const category = await prisma.category.findUnique({
     where: { slug: categorySlug },
   })
@@ -139,7 +141,7 @@ export async function exportCategoryAsZip(categorySlug: string): Promise<Buffer>
 
   zip.file('manifest.csv', manifestRows.join('\n'))
 
-  const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+  const buffer = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
   return buffer
 }
 

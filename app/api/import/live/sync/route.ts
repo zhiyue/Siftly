@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { syncBookmarks, isSyncing } from '@/lib/x-sync'
 
 /** POST — trigger a manual sync using stored credentials */
@@ -9,6 +9,7 @@ export async function POST() {
   }
 
   try {
+    const prisma = getDb()
     const [authSetting, ct0Setting] = await Promise.all([
       prisma.setting.findUnique({ where: { key: 'x_auth_token' } }),
       prisma.setting.findUnique({ where: { key: 'x_ct0' } }),

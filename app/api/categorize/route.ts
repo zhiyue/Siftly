@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 import { getActiveModel, getProvider } from '@/lib/settings'
 import {
@@ -107,6 +107,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
+  const prisma = getDb()
   const { bookmarkIds = [], apiKey, force = false } = body
 
   if (apiKey && typeof apiKey === 'string' && apiKey.trim() !== '') {

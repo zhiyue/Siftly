@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 export async function GET(): Promise<NextResponse> {
   try {
+    const prisma = getDb()
     const [
       totalBookmarks,
       bookmarkCount,

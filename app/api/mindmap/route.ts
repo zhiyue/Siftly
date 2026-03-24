@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 interface MindMapNode {
   id: string
@@ -56,6 +56,7 @@ function tweetPosition(
 }
 
 async function getBaseGraph(): Promise<MindMapResponse> {
+  const prisma = getDb()
   const [totalBookmarks, categories] = await Promise.all([
     prisma.bookmark.count(),
     prisma.category.findMany({
@@ -102,6 +103,7 @@ async function getBaseGraph(): Promise<MindMapResponse> {
 }
 
 async function getCategoryTweetNodes(categorySlug: string): Promise<MindMapResponse> {
+  const prisma = getDb()
   const category = await prisma.category.findUnique({
     where: { slug: categorySlug },
     include: {

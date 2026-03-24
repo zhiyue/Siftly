@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { seedDefaultCategories } from '@/lib/categorizer'
 
 function generateSlug(name: string): string {
@@ -14,6 +14,7 @@ function generateSlug(name: string): string {
 
 export async function GET(): Promise<NextResponse> {
   try {
+    const prisma = getDb()
     // Seed defaults on first load so the nav always has categories
     const count = await prisma.category.count()
     if (count === 0) await seedDefaultCategories()
@@ -81,6 +82,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       : '#6366f1'
 
   try {
+    const prisma = getDb()
     const existing = await prisma.category.findFirst({
       where: { OR: [{ name: trimmedName }, { slug }] },
       select: { id: true },

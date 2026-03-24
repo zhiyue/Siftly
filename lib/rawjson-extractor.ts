@@ -2,7 +2,7 @@
  * Zero-cost entity extraction from stored rawJson tweet data.
  * No AI calls — pure data mining from already-stored JSON.
  */
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 export interface ExtractedEntities {
   hashtags: string[]
@@ -257,6 +257,7 @@ export async function backfillEntities(
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
+  const prisma = getDb()
   const CHUNK = 100
   let total = 0
 

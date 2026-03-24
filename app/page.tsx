@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import Link from 'next/link'
 import { BookmarkIcon, Tag, Image, Layers, Upload, Sparkles, Search, ArrowRight, TrendingUp, Bookmark } from 'lucide-react'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import BookmarkCard from '@/components/bookmark-card'
 import type { BookmarkWithMedia } from '@/lib/types'
 
@@ -26,6 +26,7 @@ const TOP_CATS_QUERY = {
 } as const
 
 async function queryDashboard() {
+  const prisma = getDb()
   return Promise.all([
     prisma.bookmark.count(),
     prisma.category.count(),

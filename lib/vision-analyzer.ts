@@ -1,4 +1,4 @@
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
 import { getActiveModel } from '@/lib/settings'
 import { AIClient } from '@/lib/ai-client'
@@ -141,6 +141,7 @@ export interface MediaItemForAnalysis {
  * Deduplicates API calls for the same image URL.
  */
 async function getCachedAnalysis(imageUrl: string, excludeId: string): Promise<string | null> {
+  const prisma = getDb()
   const existing = await prisma.mediaItem.findFirst({
     where: { url: imageUrl, imageTags: { not: null }, id: { not: excludeId } },
     select: { imageTags: true },
@@ -153,6 +154,7 @@ export async function analyzeItem(
   client: AIClient,
   model: string,
 ): Promise<number> {
+  const prisma = getDb()
   const imageUrl = item.type === 'video' ? (item.thumbnailUrl ?? item.url) : item.url
 
   // Check URL-level dedup cache first
@@ -223,6 +225,7 @@ export async function analyzeBatch(
 }
 
 export async function analyzeUntaggedImages(client: AIClient, limit = 10): Promise<number> {
+  const prisma = getDb()
   const untagged = await prisma.mediaItem.findMany({
     where: { imageTags: null, type: { in: ['photo', 'gif', 'video'] } },
     take: limit,
@@ -240,6 +243,7 @@ export async function analyzeAllUntagged(
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
+  const prisma = getDb()
   const CHUNK = 15
   let total = 0
   let cursor: string | undefined
@@ -396,6 +400,7 @@ export async function enrichAllBookmarks(
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
+  const prisma = getDb()
   const CHUNK = ENRICH_BATCH_SIZE * ENRICH_CONCURRENCY * 2 // fetch ahead of processing
   let enriched = 0
   let cursor: string | undefined
@@ -504,6 +509,7 @@ export async function enrichBookmarkSemanticTags(
   client: AIClient,
   entities?: BookmarkForEnrichment['entities'],
 ): Promise<string[]> {
+  const prisma = getDb()
   const results = await enrichBatchSemanticTags(
     [{ id: bookmarkId, text: tweetText, imageTags, entities }],
     client,

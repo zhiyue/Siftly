@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { startScheduler, stopScheduler, isSchedulerRunning } from '@/lib/x-sync'
 
 /** GET — return current X credentials status + schedule config */
 export async function GET() {
   try {
+    const prisma = getDb()
     const [authToken, ct0, interval, lastSync] = await Promise.all([
       prisma.setting.findUnique({ where: { key: 'x_auth_token' } }),
       prisma.setting.findUnique({ where: { key: 'x_ct0' } }),
@@ -55,6 +56,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const prisma = getDb()
     if (trimmedAuth && trimmedCt0) {
       await Promise.all([
         prisma.setting.upsert({
@@ -96,6 +98,7 @@ export async function POST(request: NextRequest) {
 /** DELETE — remove credentials and stop scheduler */
 export async function DELETE() {
   try {
+    const prisma = getDb()
     await prisma.setting.deleteMany({
       where: { key: { in: ['x_auth_token', 'x_ct0', 'x_sync_interval', 'x_last_sync'] } },
     })

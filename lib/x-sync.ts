@@ -1,4 +1,4 @@
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { fetchPage, parsePage, importTweets } from '@/lib/twitter-api'
 
 // ── Sync ────────────────────────────────────────────────────────────────────────
@@ -43,6 +43,7 @@ export async function syncBookmarks(
 
     // Only update last sync timestamp if we actually fetched tweets
     if (imported > 0 || skipped > 0) {
+      const prisma = getDb()
       const now = new Date().toISOString()
       await prisma.setting.upsert({
         where: { key: 'x_last_sync' },
@@ -74,6 +75,7 @@ let syncing = false
 export async function startScheduler() {
   stopScheduler()
 
+  const prisma = getDb()
   const intervalSetting = await prisma.setting.findUnique({ where: { key: 'x_sync_interval' } })
   if (!intervalSetting?.value || intervalSetting.value === 'off') return
 
@@ -100,6 +102,7 @@ async function runScheduledSync() {
   if (syncing) return
 
   try {
+    const prisma = getDb()
     const [authSetting, ct0Setting] = await Promise.all([
       prisma.setting.findUnique({ where: { key: 'x_auth_token' } }),
       prisma.setting.findUnique({ where: { key: 'x_ct0' } }),

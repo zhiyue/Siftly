@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { invalidateSettingsCache } from '@/lib/settings'
 
 function maskKey(raw: string | null): string | null {
@@ -24,6 +24,7 @@ const ALLOWED_OPENAI_MODELS = [
 
 export async function GET(): Promise<NextResponse> {
   try {
+    const prisma = getDb()
     const [anthropic, anthropicModel, provider, openai, openaiModel, xClientId, xClientSecret] = await Promise.all([
       prisma.setting.findUnique({ where: { key: 'anthropicApiKey' } }),
       prisma.setting.findUnique({ where: { key: 'anthropicModel' } }),
@@ -71,6 +72,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
+  const prisma = getDb()
   const { anthropicApiKey, anthropicModel, provider, openaiApiKey, openaiModel } = body
 
   // Save provider if provided
@@ -203,6 +205,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid key' }, { status: 400 })
   }
 
+  const prisma = getDb()
   await prisma.setting.deleteMany({ where: { key: body.key } })
   invalidateSettingsCache()
   return NextResponse.json({ deleted: true })

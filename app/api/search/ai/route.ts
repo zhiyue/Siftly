@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { ftsSearch } from '@/lib/fts'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 import { getActiveModel, getProvider } from '@/lib/settings'
@@ -29,6 +29,7 @@ let _categoriesCacheExpiry = 0
 
 async function getDbApiKey(): Promise<string> {
   if (_apiKey !== null && Date.now() < _apiKeyExpiry) return _apiKey
+  const prisma = getDb()
   const provider = await getProvider()
   const keyName = provider === 'openai' ? 'openaiApiKey' : 'anthropicApiKey'
   const setting = await prisma.setting.findUnique({ where: { key: keyName } })
@@ -39,6 +40,7 @@ async function getDbApiKey(): Promise<string> {
 }
 async function getAllCategories() {
   if (_categoriesCache && Date.now() < _categoriesCacheExpiry) return _categoriesCache
+  const prisma = getDb()
   _categoriesCache = await prisma.category.findMany({ select: { slug: true, name: true, description: true } })
   _categoriesCacheExpiry = Date.now() + 2 * 60 * 1000
   return _categoriesCache
@@ -188,6 +190,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
+  const prisma = getDb()
   const { query, category } = body
   if (!query?.trim()) return NextResponse.json({ error: 'Query required' }, { status: 400 })
 

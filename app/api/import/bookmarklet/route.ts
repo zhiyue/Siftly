@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 const ALLOWED_ORIGINS = new Set(['https://x.com', 'https://twitter.com'])
 
@@ -122,6 +122,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'No tweets provided' }, { status: 400, headers: cors })
   }
 
+  const prisma = getDb()
   let imported = 0
   let skipped = 0
 

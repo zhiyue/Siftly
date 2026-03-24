@@ -1,4 +1,4 @@
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -237,6 +237,7 @@ export function tweetFullText(tweet: TweetResult): string {
 export async function importTweets(
   tweets: TweetResult[],
 ): Promise<{ imported: number; skipped: number }> {
+  const prisma = getDb()
   let imported = 0
   let skipped = 0
 

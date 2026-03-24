@@ -1,4 +1,4 @@
-import prisma, { getD1, getDb } from '@/lib/db'
+import { getD1, getDb } from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
 import { getActiveModel, getProvider } from '@/lib/settings'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
@@ -134,6 +134,7 @@ interface CategorizationResult {
 }
 
 export async function seedDefaultCategories(): Promise<void> {
+  const prisma = getDb()
   const existing = await prisma.category.findMany({ select: { slug: true } })
   const existingSlugs = new Set(existing.map((c) => c.slug))
 
@@ -369,6 +370,8 @@ export async function categorizeAll(
   shouldAbort?: () => boolean,
 ): Promise<void> {
   await seedDefaultCategories()
+
+  const prisma = getDb()
 
   // Resolve auth once — avoids re-resolving inside every batch call
   const provider = await getProvider()

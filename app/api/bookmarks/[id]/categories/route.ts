@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 // PUT: Replace all categories for a bookmark
 export async function PUT(
@@ -17,6 +17,7 @@ export async function PUT(
   const { categoryIds = [] } = body
 
   try {
+    const prisma = getDb()
     // Delete existing categories
     await prisma.bookmarkCategory.deleteMany({ where: { bookmarkId: id } })
 

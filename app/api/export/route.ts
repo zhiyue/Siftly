@@ -53,7 +53,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   if (type === 'zip') {
     try {
-      let zipBuffer: Buffer
+      let zipBuffer: Uint8Array
 
       if (categorySlug) {
         zipBuffer = await exportCategoryAsZip(categorySlug)
@@ -72,7 +72,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       const JSZip = (await import('jszip')).default
       const zip = new JSZip()
       zip.file('bookmarks.json', json)
-      zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+      zipBuffer = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 
       return new NextResponse(new Uint8Array(zipBuffer), {
         status: 200,

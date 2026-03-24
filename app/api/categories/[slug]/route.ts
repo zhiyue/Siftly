@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 
 const DEFAULT_PAGE = 1
 const DEFAULT_LIMIT = 24
@@ -24,6 +24,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   const skip = (page - 1) * limit
 
   try {
+    const prisma = getDb()
     const category = await prisma.category.findUnique({
       where: { slug },
     })
@@ -118,6 +119,7 @@ export async function DELETE(_request: NextRequest, context: RouteContext): Prom
   const { slug } = await context.params
 
   try {
+    const prisma = getDb()
     const category = await prisma.category.findUnique({
       where: { slug },
       select: { id: true, name: true },

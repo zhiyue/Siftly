@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { parseBookmarksJson } from '@/lib/parser'
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -28,6 +28,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   } catch {
     return NextResponse.json({ error: 'Failed to read file content' }, { status: 400 })
   }
+
+  const prisma = getDb()
 
   // Create an import job to track progress
   const importJob = await prisma.importJob.create({

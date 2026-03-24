@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/db'
+import { getDb } from '@/lib/db'
 import { resolveAnthropicClient } from '@/lib/claude-cli-auth'
 import { resolveOpenAIClient } from '@/lib/openai-auth'
 
@@ -13,6 +13,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const provider = body.provider ?? 'anthropic'
+
+  const prisma = getDb()
 
   if (provider === 'anthropic') {
     const setting = await prisma.setting.findUnique({ where: { key: 'anthropicApiKey' } })
