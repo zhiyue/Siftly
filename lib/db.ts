@@ -28,6 +28,7 @@ let _cached: PrismaClient | null = null
 export default new Proxy({} as PrismaClient, {
   get(_target, prop) {
     if (!_cached) _cached = getDb()
-    return (_cached as unknown as Record<string | symbol, unknown>)[prop]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (_cached as any)[prop]
   },
 })
