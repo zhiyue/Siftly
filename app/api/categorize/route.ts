@@ -17,8 +17,8 @@ import {
 } from '@/lib/vision-analyzer'
 import { backfillEntities } from '@/lib/rawjson-extractor'
 import { rebuildFts } from '@/lib/fts'
-import { getPipelineStateManager } from '@/lib/pipeline-do'
-import type { PipelineState } from '@/lib/pipeline-do'
+import { getPipelineStateManager } from '@/lib/pipeline-state'
+import type { PipelineState } from '@/lib/pipeline-state'
 
 // ── State manager ────────────────────────────────────────────────────
 // Uses the in-process globalThis state manager. Within a single Worker

@@ -25,21 +25,12 @@
     }
   ],
 
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "PIPELINE_DO",
-        "class_name": "PipelineDO"
-      }
-    ]
-  },
-
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_classes": ["PipelineDO"]
-    }
-  ],
+  // Durable Objects disabled — OpenNext doesn't support exporting custom DOs.
+  // Pipeline state uses in-process globalThis via PipelineStateManager.
+  // Re-enable when OpenNext adds DO export support.
+  // "durable_objects": {
+  //   "bindings": [{ "name": "PIPELINE_DO", "class_name": "PipelineDO" }]
+  // },
 
   "vars": {
     "ANTHROPIC_BASE_URL": "",
