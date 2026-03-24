@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
-    "@prisma/adapter-better-sqlite3": "^7.4.2",
+    "@opennextjs/cloudflare": "^1.17.3",
+    "@prisma/adapter-d1": "^7.5.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-progress": "^1.1.8",
     "@radix-ui/react-select": "^2.2.6",
@@ -24,7 +25,6 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@xyflow/react": "^12.10.1",
-    "better-sqlite3": "^12.6.2",
     "class-variance-authority": "^0.7.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.576.0",
@@ -37,7 +37,6 @@
   "devDependencies": {
     "@prisma/client": "^7.4.2",
     "@tailwindcss/postcss": "^4",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -46,6 +45,7 @@
     "prisma": "^7.4.2",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "^4.77.0"
   }
 }

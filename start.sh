@@ -90,4 +90,4 @@ open_browser() {
 
 (sleep 2 && open_browser http://localhost:$PORT) &
 
-npx next dev -p $PORT
+npx wrangler dev -p $PORT
