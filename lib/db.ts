@@ -1,18 +1,33 @@
-import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
+import { PrismaD1 } from '@prisma/adapter-d1'
 import { PrismaClient } from '@/app/generated/prisma/client'
-import path from 'path'
+import { getCloudflareContext } from '@opennextjs/cloudflare'
 
-// Use DATABASE_URL from env, fallback to default dev path
-const dbUrl = process.env.DATABASE_URL ?? `file:${path.join(process.cwd(), 'prisma', 'dev.db')}`
-
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
-
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    adapter: new PrismaBetterSqlite3({ url: dbUrl }),
+/**
+ * Returns a PrismaClient backed by Cloudflare D1.
+ * Must only be called inside request handlers (not at module top-level).
+ */
+export function getDb(): PrismaClient {
+  const { env } = getCloudflareContext()
+  return new PrismaClient({
+    adapter: new PrismaD1(env.DB),
   })
+}
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+/**
+ * Returns the raw D1 database binding for direct SQL operations (FTS5, batch).
+ */
+export function getD1(): D1Database {
+  const { env } = getCloudflareContext()
+  return env.DB
+}
 
-export default prisma
+// Backward-compatible default export.
+// Caches per-request to avoid creating PrismaClient on every property access.
+let _cached: PrismaClient | null = null
+
+export default new Proxy({} as PrismaClient, {
+  get(_target, prop) {
+    if (!_cached) _cached = getDb()
+    return (_cached as unknown as Record<string | symbol, unknown>)[prop]
+  },
+})
