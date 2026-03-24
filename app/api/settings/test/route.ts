@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
-import { resolveAnthropicClient, getCliAuthStatus } from '@/lib/claude-cli-auth'
+import { resolveAnthropicClient } from '@/lib/claude-cli-auth'
 import { resolveOpenAIClient } from '@/lib/openai-auth'
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -22,11 +22,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     try {
       client = resolveAnthropicClient({ dbKey })
     } catch {
-      const cliStatus = getCliAuthStatus()
-      if (cliStatus.available && cliStatus.expired) {
-        return NextResponse.json({ working: false, error: 'Claude CLI session expired — run `claude` to refresh' })
-      }
-      return NextResponse.json({ working: false, error: 'No API key found. Add one in Settings or log in with Claude CLI.' })
+      return NextResponse.json({ working: false, error: 'No API key found. Add one in Settings.' })
     }
 
     try {
@@ -55,7 +51,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     try {
       client = resolveOpenAIClient({ dbKey })
     } catch {
-      return NextResponse.json({ working: false, error: 'No OpenAI API key found. Add one in Settings or set up Codex CLI.' })
+      return NextResponse.json({ working: false, error: 'No OpenAI API key found. Add one in Settings.' })
     }
 
     try {
