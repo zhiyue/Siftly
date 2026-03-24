@@ -41,13 +41,13 @@ export default function AISearchPage() {
     inputRef.current?.focus()
     // Load image analysis progress
     fetch('/api/analyze/images')
-      .then((r) => r.json())
-      .then((data: ImageStats) => setImageStats(data))
+      .then((r) => r.json() as Promise<ImageStats>)
+      .then((data) => setImageStats(data))
       .catch(() => {})
     // Hide standalone image analysis when the main pipeline is already handling it
     fetch('/api/categorize')
-      .then((r) => r.json())
-      .then((d: { status: string }) => {
+      .then((r) => r.json() as Promise<{ status: string }>)
+      .then((d) => {
         if (d.status === 'running' || d.status === 'stopping') setPipelineRunning(true)
       })
       .catch(() => {})

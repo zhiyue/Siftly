@@ -18,7 +18,7 @@ export async function GET(): Promise<NextResponse> {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   let batchSize = 20
   try {
-    const body = await request.json()
+    const body = await request.json() as { batchSize?: number }
     if (typeof body.batchSize === 'number') batchSize = Math.min(body.batchSize, 50)
   } catch {
     // use default

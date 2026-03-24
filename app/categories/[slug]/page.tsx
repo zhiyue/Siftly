@@ -68,8 +68,8 @@ export default function CategoryPage() {
         return
       }
 
-      const catData = await catRes.json()
-      const bmData = await bookmarksRes.json()
+      const catData = await catRes.json() as { category: Category }
+      const bmData = await bookmarksRes.json() as { bookmarks: BookmarkWithMedia[]; total: number }
 
       setData({
         category: catData.category,

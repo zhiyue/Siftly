@@ -121,8 +121,8 @@ function ApiKeyField({
   // Load existing saved key status on mount
   useEffect(() => {
     fetch('/api/settings')
-      .then((r) => r.json())
-      .then((d: Record<string, unknown>) => {
+      .then((r) => r.json() as Promise<Record<string, unknown>>)
+      .then((d) => {
         const hasKeyField = fieldKey === 'openaiApiKey' ? 'hasOpenaiKey' : 'hasAnthropicKey'
         const hasKey = d[hasKeyField]
         const masked = d[fieldKey] as string | null
@@ -312,7 +312,7 @@ function ModelSelector({
 
   useEffect(() => {
     fetch('/api/settings')
-      .then((r) => r.json())
+      .then((r) => r.json() as Promise<Record<string, unknown>>)
       .then((d) => { if (d[settingKey]) setValue(d[settingKey] as string) })
       .catch(() => {})
   }, [settingKey])
@@ -403,8 +403,8 @@ function ApiKeySection({ onToast }: { onToast: (t: Toast) => void }) {
 
   useEffect(() => {
     fetch('/api/settings')
-      .then((r) => r.json())
-      .then((d: { provider?: string }) => {
+      .then((r) => r.json() as Promise<{ provider?: string }>)
+      .then((d) => {
         setProvider(d.provider === 'openai' ? 'openai' : 'anthropic')
       })
       .catch(() => setProvider('anthropic'))
@@ -708,8 +708,8 @@ function XOAuthSection({ onToast }: { onToast: (t: Toast) => void }) {
 
   useEffect(() => {
     fetch('/api/settings')
-      .then((r) => r.json())
-      .then((d: Record<string, unknown>) => {
+      .then((r) => r.json() as Promise<Record<string, unknown>>)
+      .then((d) => {
         if (d.hasXOAuth && d.xOAuthClientId) setSavedId(d.xOAuthClientId as string)
         if (d.xOAuthClientSecret) setSavedSecret(d.xOAuthClientSecret as string)
       })

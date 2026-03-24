@@ -150,23 +150,23 @@ export default function Nav() {
   useEffect(() => {
     // Fetch stats
     fetch('/api/stats')
-      .then((r) => r.json())
-      .then((d: { totalBookmarks?: number }) => {
+      .then((r) => r.json() as Promise<{ totalBookmarks?: number }>)
+      .then((d) => {
         if (d.totalBookmarks !== undefined) setTotalBookmarks(d.totalBookmarks)
       })
       .catch(() => {})
 
     // Fetch categories with counts
     fetch('/api/categories')
-      .then((r) => r.json())
-      .then((d: { categories: CategoryItem[] }) => setCategories(d.categories ?? []))
+      .then((r) => r.json() as Promise<{ categories: CategoryItem[] }>)
+      .then((d) => setCategories(d.categories ?? []))
       .catch(() => {})
 
     // Poll pipeline status every 3s to show global indicator
     function pollPipeline() {
       fetch('/api/categorize')
-        .then((r) => r.json())
-        .then((d: PipelineStatus) => setPipeline(d))
+        .then((r) => r.json() as Promise<PipelineStatus>)
+        .then((d) => setPipeline(d))
         .catch(() => {})
     }
     pollPipeline()

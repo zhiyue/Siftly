@@ -45,7 +45,7 @@ function AddCategoryModal({ open, onClose, onAdd }: AddCategoryModalProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), color, description: description.trim() || undefined }),
       })
-      const data = await res.json()
+      const data = await res.json() as { error?: string; category: Category }
       if (!res.ok) throw new Error(data.error ?? 'Failed to create category')
       onAdd(data.category)
       setName('')
@@ -237,8 +237,8 @@ export default function CategoriesPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/categories').then((r) => r.json()),
-      fetch('/api/stats').then((r) => r.json()),
+      fetch('/api/categories').then((r) => r.json() as Promise<{ categories: Category[] }>),
+      fetch('/api/stats').then((r) => r.json() as Promise<{ totalBookmarks?: number }>),
     ])
       .then(([catData, statsData]) => {
         setCategories(catData.categories ?? [])
