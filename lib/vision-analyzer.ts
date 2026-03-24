@@ -1,8 +1,6 @@
 import prisma from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
-import { getCliAvailability, claudePrompt, modelNameToCliAlias } from '@/lib/claude-cli-auth'
-import { getCodexCliAvailability, codexPrompt } from '@/lib/codex-cli'
-import { getActiveModel, getProvider } from '@/lib/settings'
+import { getActiveModel } from '@/lib/settings'
 import { AIClient } from '@/lib/ai-client'
 
 export { getActiveModel } from '@/lib/settings'
@@ -70,47 +68,12 @@ Rules:
 const RETRY_DELAYS_MS = [1500, 4000, 10000]
 const CONCURRENCY = 12
 
-/**
- * CLI-based vision analysis: passes the image URL in the prompt text.
- * Works with Codex CLI (ChatGPT OAuth) and Claude CLI without needing SDK access.
- */
-async function analyzeImageViaCli(imageUrl: string): Promise<string> {
-  const provider = await getProvider()
-  // Sanitize URL: strip control characters and newlines to prevent prompt injection
-  const safeUrl = imageUrl.replace(/[\r\n\t]/g, '').trim()
-  if (!safeUrl.startsWith('http://') && !safeUrl.startsWith('https://')) return ''
-  const urlPrompt = `Look at this image URL and analyze it: ${safeUrl}\n\n${ANALYSIS_PROMPT}`
-
-  if (provider === 'openai') {
-    if (!(await getCodexCliAvailability())) return ''
-    const result = await codexPrompt(urlPrompt, { timeoutMs: 60_000 })
-    if (!result.success || !result.data) return ''
-    const jsonMatch = result.data.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return ''
-    try { JSON.parse(jsonMatch[0]); return jsonMatch[0] } catch { return '' }
-  } else {
-    if (!(await getCliAvailability())) return ''
-    const model = await getActiveModel()
-    const cliModel = modelNameToCliAlias(model)
-    const result = await claudePrompt(urlPrompt, { model: cliModel, timeoutMs: 60_000 })
-    if (!result.success || !result.data) return ''
-    const jsonMatch = result.data.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return ''
-    try { JSON.parse(jsonMatch[0]); return jsonMatch[0] } catch { return '' }
-  }
-}
-
 async function analyzeImageWithRetry(
   url: string,
-  client: AIClient | null,
+  client: AIClient,
   model: string,
   attempt = 0,
 ): Promise<string> {
-  // If no SDK client, use CLI path with image URL
-  if (!client) {
-    return attempt === 0 ? analyzeImageViaCli(url) : ''
-  }
-
   const img = await fetchImageAsBase64(url)
   if (!img) return ''
 
@@ -187,7 +150,7 @@ async function getCachedAnalysis(imageUrl: string, excludeId: string): Promise<s
 
 export async function analyzeItem(
   item: MediaItemForAnalysis,
-  client: AIClient | null,
+  client: AIClient,
   model: string,
 ): Promise<number> {
   const imageUrl = item.type === 'video' ? (item.thumbnailUrl ?? item.url) : item.url
@@ -239,7 +202,7 @@ export async function runWithConcurrency<T>(
 
 export async function analyzeBatch(
   items: MediaItemForAnalysis[],
-  client: AIClient | null,
+  client: AIClient,
   onProgress?: (delta: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
@@ -378,7 +341,6 @@ export async function enrichBatchSemanticTags(
   if (bookmarks.length === 0) return []
 
   const prompt = buildEnrichmentPrompt(bookmarks)
-  const provider = await getProvider()
 
   // Helper to parse enrichment response
   const parseResponse = (text: string): EnrichmentResult[] => {
@@ -395,31 +357,8 @@ export async function enrichBatchSemanticTags(
     })).filter((r) => r.id)
   }
 
-  // Prefer CLI over SDK
-  if (provider === 'openai') {
-    if (await getCodexCliAvailability()) {
-      const result = await codexPrompt(prompt, { timeoutMs: 90_000 })
-      if (result.success && result.data) {
-        try { return parseResponse(result.data) }
-        catch { console.warn('[enrich] Codex CLI response parse failed, falling back to SDK') }
-      }
-    }
-  } else {
-    if (await getCliAvailability()) {
-      const model = await getActiveModel()
-      const cliModel = modelNameToCliAlias(model)
-
-      const result = await claudePrompt(prompt, { model: cliModel, timeoutMs: 90_000 })
-      if (result.success && result.data) {
-        try { return parseResponse(result.data) }
-        catch { console.warn('[enrich] CLI response parse failed, falling back to SDK') }
-      }
-    }
-  }
-
-  // Fallback to SDK
   if (!client) {
-    console.warn('[enrich] CLI not available and no API client')
+    console.warn('[enrich] No API client configured')
     return []
   }
 

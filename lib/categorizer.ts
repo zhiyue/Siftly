@@ -1,7 +1,5 @@
 import prisma from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
-import { getCliAvailability, claudePrompt, modelNameToCliAlias } from '@/lib/claude-cli-auth'
-import { getCodexCliAvailability, codexPrompt } from '@/lib/codex-cli'
 import { getActiveModel, getProvider } from '@/lib/settings'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 
@@ -239,43 +237,9 @@ export async function categorizeBatch(
   if (bookmarks.length === 0) return []
 
   const prompt = buildCategorizationPrompt(bookmarks, categoryDescriptions, allSlugs)
-  const provider = await getProvider()
 
-  // Prefer CLI over SDK (avoids OAuth token extraction, uses CLI directly)
-  if (provider === 'openai') {
-    if (await getCodexCliAvailability()) {
-      const result = await codexPrompt(prompt, { timeoutMs: 60_000 })
-      if (result.success && result.data) {
-        try {
-          return parseCategorizationResponse(result.data, new Set(allSlugs))
-        } catch (parseErr) {
-          console.warn('[categorize] Codex CLI response parse failed, falling back to SDK:', parseErr)
-        }
-      } else {
-        console.warn('[categorize] Codex CLI failed, falling back to SDK:', result.error)
-      }
-    }
-  } else {
-    if (await getCliAvailability()) {
-      const model = await getActiveModel()
-      const cliModel = modelNameToCliAlias(model)
-
-      const result = await claudePrompt(prompt, { model: cliModel, timeoutMs: 60_000 })
-      if (result.success && result.data) {
-        try {
-          return parseCategorizationResponse(result.data, new Set(allSlugs))
-        } catch (parseErr) {
-          console.warn('[categorize] CLI response parse failed, falling back to SDK:', parseErr)
-        }
-      } else {
-        console.warn('[categorize] CLI failed, falling back to SDK:', result.error)
-      }
-    }
-  }
-
-  // Fallback to SDK (requires API key)
   if (!client) {
-    throw new Error('No CLI available and no API key configured.')
+    throw new Error('No API key configured. Add your key in Settings.')
   }
 
   const model = await getActiveModel()
@@ -401,12 +365,7 @@ export async function categorizeAll(
   const provider = await getProvider()
   const keyName = provider === 'openai' ? 'openaiApiKey' : 'anthropicApiKey'
   const apiKeySetting = await prisma.setting.findUnique({ where: { key: keyName } })
-  let client: AIClient | null = null
-  try {
-    client = await resolveAIClient({ dbKey: apiKeySetting?.value })
-  } catch {
-    // CLI might still work — client stays null
-  }
+  const client = await resolveAIClient({ dbKey: apiKeySetting?.value })
 
   // Load ALL categories (default + custom) for the prompt
   const dbCategories = await prisma.category.findMany({ select: { slug: true, name: true, description: true } })
