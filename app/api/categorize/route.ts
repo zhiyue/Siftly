@@ -252,7 +252,7 @@ async function runPipeline(opts: {
           entities: true,
           mediaItems: {
             where: { type: { in: ['photo', 'gif', 'video'] } },
-            select: { id: true, url: true, thumbnailUrl: true, type: true, imageTags: true },
+            select: { id: true, bookmarkId: true, url: true, thumbnailUrl: true, type: true, imageTags: true },
           },
         },
       })
@@ -265,7 +265,7 @@ async function runPipeline(opts: {
         if (media.imageTags !== null) continue
         try {
           await analyzeItem(
-            { id: media.id, url: media.url, thumbnailUrl: media.thumbnailUrl, type: media.type },
+            { id: media.id, bookmarkId: media.bookmarkId, url: media.url, thumbnailUrl: media.thumbnailUrl, type: media.type },
             client!,
             model,
           )

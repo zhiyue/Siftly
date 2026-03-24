@@ -45,7 +45,7 @@ async function runAnalysis(client: AIClient | null, batchSize: number): Promise<
   const untagged = await prisma.mediaItem.findMany({
     where: { imageTags: null, type: { in: ['photo', 'gif'] } },
     take: batchSize,
-    select: { id: true, url: true, thumbnailUrl: true, type: true },
+    select: { id: true, bookmarkId: true, url: true, thumbnailUrl: true, type: true },
   })
 
   if (untagged.length === 0) {

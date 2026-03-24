@@ -2,6 +2,7 @@ import { getDb } from '@/lib/db'
 import { buildImageContext } from '@/lib/image-context'
 import { getActiveModel } from '@/lib/settings'
 import { AIClient } from '@/lib/ai-client'
+import { uploadMedia, getMedia, mediaKey } from '@/lib/r2'
 
 export { getActiveModel } from '@/lib/settings'
 
@@ -17,9 +18,47 @@ function guessMediaType(url: string, contentTypeHeader: string | null): AllowedM
 
 const MAX_IMAGE_BYTES = 3_500_000 // 3.5MB raw → ~4.7MB base64, under Claude's 5MB limit
 
+/** Convert ArrayBuffer to base64 string — safe for large buffers in Workers (no spread operator). */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  const CHUNK = 0x8000 // 32 KB chunks to avoid call-stack limits
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
+}
+
+function filenameFromUrl(url: string): string {
+  try {
+    const pathname = new URL(url).pathname
+    return pathname.split('/').pop() || 'image'
+  } catch {
+    return 'image'
+  }
+}
+
 async function fetchImageAsBase64(
   url: string,
+  r2Info?: { bookmarkId: string; mediaItemId: string },
 ): Promise<{ data: string; mediaType: AllowedMediaType } | null> {
+  // 1. Try R2 cache first
+  if (r2Info) {
+    try {
+      const key = mediaKey(r2Info.bookmarkId, filenameFromUrl(url))
+      const r2Obj = await getMedia(key)
+      if (r2Obj) {
+        const buffer = await r2Obj.arrayBuffer()
+        const ct = r2Obj.httpMetadata?.contentType ?? null
+        const mediaType = guessMediaType(url, ct)
+        return { data: arrayBufferToBase64(buffer), mediaType }
+      }
+    } catch {
+      // R2 unavailable — fall through to origin fetch
+    }
+  }
+
+  // 2. Fetch from origin
   try {
     const res = await fetch(url, {
       headers: {
@@ -36,7 +75,21 @@ async function fetchImageAsBase64(
       return null
     }
     const mediaType = guessMediaType(url, res.headers.get('content-type'))
-    return { data: Buffer.from(buffer).toString('base64'), mediaType }
+
+    // 3. Upload to R2 in the background for future use
+    if (r2Info) {
+      const key = mediaKey(r2Info.bookmarkId, filenameFromUrl(url))
+      const prisma = getDb()
+      // Fire-and-forget: don't block vision analysis on R2 upload
+      uploadMedia(key, buffer, mediaType)
+        .then(() => prisma.mediaItem.update({
+          where: { id: r2Info.mediaItemId },
+          data: { localPath: key },
+        }))
+        .catch(() => { /* R2 upload failed — non-critical */ })
+    }
+
+    return { data: arrayBufferToBase64(buffer), mediaType }
   } catch {
     return null
   }
@@ -72,9 +125,10 @@ async function analyzeImageWithRetry(
   url: string,
   client: AIClient,
   model: string,
+  r2Info?: { bookmarkId: string; mediaItemId: string },
   attempt = 0,
 ): Promise<string> {
-  const img = await fetchImageAsBase64(url)
+  const img = await fetchImageAsBase64(url, r2Info)
   if (!img) return ''
 
   try {
@@ -123,7 +177,7 @@ async function analyzeImageWithRetry(
 
     if (isRetryable && attempt < RETRY_DELAYS_MS.length) {
       await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]))
-      return analyzeImageWithRetry(url, client, model, attempt + 1)
+      return analyzeImageWithRetry(url, client, model, r2Info, attempt + 1)
     }
     return ''
   }
@@ -131,6 +185,7 @@ async function analyzeImageWithRetry(
 
 export interface MediaItemForAnalysis {
   id: string
+  bookmarkId: string
   url: string
   thumbnailUrl: string | null
   type: string
@@ -165,7 +220,8 @@ export async function analyzeItem(
   }
 
   const prefix = item.type === 'video' ? '{"_type":"video_thumbnail",' : ''
-  let tags = await analyzeImageWithRetry(imageUrl, client, model)
+  const r2Info = { bookmarkId: item.bookmarkId, mediaItemId: item.id }
+  let tags = await analyzeImageWithRetry(imageUrl, client, model, r2Info)
 
   if (tags && prefix) {
     // Inject a _type marker into the JSON for video thumbnails
@@ -229,7 +285,7 @@ export async function analyzeUntaggedImages(client: AIClient, limit = 10): Promi
   const untagged = await prisma.mediaItem.findMany({
     where: { imageTags: null, type: { in: ['photo', 'gif', 'video'] } },
     take: limit,
-    select: { id: true, url: true, thumbnailUrl: true, type: true },
+    select: { id: true, bookmarkId: true, url: true, thumbnailUrl: true, type: true },
   })
   if (untagged.length === 0) return 0
   return analyzeBatch(untagged, client)
@@ -262,7 +318,7 @@ export async function analyzeAllUntagged(
       },
       orderBy: { id: 'asc' },
       take: CHUNK,
-      select: { id: true, url: true, thumbnailUrl: true, type: true },
+      select: { id: true, bookmarkId: true, url: true, thumbnailUrl: true, type: true },
     })
 
     if (untagged.length === 0) break
