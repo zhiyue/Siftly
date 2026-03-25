@@ -13,9 +13,12 @@
 # testing
 /coverage
 
-# next.js
+# next.js (legacy, being removed)
 /.next/
 /out/
+
+# vite build output
+/public/
 
 # production
 /build
@@ -71,3 +74,4 @@ promo-video/
 *.swo
 *~
 .open-next/
+.wrangler/

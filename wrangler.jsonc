@@ -1,37 +1,30 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "siftly",
-  "main": ".open-next/worker.js",
+  "main": "src/worker/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
-
   "assets": {
-    "directory": ".open-next/assets",
-    "binding": "ASSETS"
+    "directory": "public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
   },
-
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "siftly-db",
-      "database_id": "<YOUR_D1_DATABASE_ID>"
-    }
-  ],
-
-  "r2_buckets": [
-    {
-      "binding": "MEDIA_BUCKET",
-      "bucket_name": "siftly-media"
-    }
-  ],
-
-  // Durable Objects disabled — OpenNext doesn't support exporting custom DOs.
-  // Pipeline state uses in-process globalThis via PipelineStateManager.
-  // Re-enable when OpenNext adds DO export support.
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "siftly-db",
+    "database_id": "<YOUR_D1_DATABASE_ID>"
+  }],
+  "r2_buckets": [{
+    "binding": "MEDIA_BUCKET",
+    "bucket_name": "siftly-media"
+  }],
+  // Durable Objects — uncomment in Task H6 when PipelineDO is exported from the worker
   // "durable_objects": {
   //   "bindings": [{ "name": "PIPELINE_DO", "class_name": "PipelineDO" }]
   // },
-
+  // "migrations": [
+  //   { "tag": "v1", "new_classes": ["PipelineDO"] }
+  // ],
   "vars": {
     "ANTHROPIC_BASE_URL": "",
     "OPENAI_BASE_URL": ""
