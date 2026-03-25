@@ -1,28 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-/**
- * Optional HTTP Basic Auth protection.
- *
- * Set SIFTLY_USERNAME and SIFTLY_PASSWORD in your .env to enable.
- * Leave both unset (the default) for unrestricted local access.
- *
- * The bookmarklet endpoint is excluded so cross-origin imports from x.com
- * continue to work regardless of auth configuration.
- */
 export function middleware(request: NextRequest): NextResponse {
   const username = process.env.SIFTLY_USERNAME?.trim()
   const password = process.env.SIFTLY_PASSWORD?.trim()
 
-  // No credentials configured → pass through (default local behaviour)
   if (!username || !password) return NextResponse.next()
 
-  // Let the bookmarklet endpoint through — it's called cross-origin from x.com
-  // and can't include Basic Auth credentials.
   if (request.nextUrl.pathname === '/api/import/bookmarklet') {
     return NextResponse.next()
   }
 
   const authHeader = request.headers.get('Authorization')
+
+  // Bearer tokens pass through middleware — validated at route level
+  if (authHeader?.startsWith('Bearer ')) {
+    return NextResponse.next()
+  }
 
   if (authHeader?.startsWith('Basic ')) {
     try {
@@ -35,9 +28,7 @@ export function middleware(request: NextRequest): NextResponse {
           return NextResponse.next()
         }
       }
-    } catch {
-      // malformed base64 → fall through to 401
-    }
+    } catch {}
   }
 
   return new NextResponse('Unauthorized', {
@@ -48,8 +39,6 @@ export function middleware(request: NextRequest): NextResponse {
 
 export const config = {
   matcher: [
-    // Match everything except Next.js internals (_next/static, _next/image,
-    // _next/webpack-hmr dev HMR websocket, etc.) and static root files.
     '/((?!_next/|favicon.ico|icon.svg).*)',
   ],
 }
