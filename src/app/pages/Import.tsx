@@ -893,6 +893,7 @@ function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void 
   const [success, setSuccess] = useState('')
 
   useEffect(() => {
+    // Load config
     fetch('/api/import/live')
       .then(async (r) => {
         const data = await r.json() as { hasCredentials: boolean; syncInterval: string; lastSync: string | null }
@@ -902,6 +903,41 @@ function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void 
       })
       .catch(() => setError('Failed to load config'))
       .finally(() => setLoading(false))
+
+    // Check if a sync is already running (e.g., navigated away and back)
+    fetch('/api/import/live/sync')
+      .then(async (r) => {
+        const p = await r.json() as { status: string; page: number; imported: number; skipped: number; error?: string }
+        if (p.status === 'syncing') {
+          setSyncing(true)
+          setSyncProgress({ page: p.page, imported: p.imported, skipped: p.skipped })
+          // Start polling
+          const poll = setInterval(async () => {
+            try {
+              const r2 = await fetch('/api/import/live/sync')
+              const p2 = await r2.json() as { status: string; page: number; imported: number; skipped: number; error?: string }
+              setSyncProgress({ page: p2.page, imported: p2.imported, skipped: p2.skipped })
+              if (p2.status === 'done') {
+                clearInterval(poll)
+                setSyncing(false)
+                setLastSync(new Date().toISOString())
+                setSuccess(`Synced: ${p2.imported} imported, ${p2.skipped} skipped`)
+                setSyncProgress(null)
+              } else if (p2.status === 'error') {
+                clearInterval(poll)
+                setSyncing(false)
+                setSyncProgress(null)
+                setError(p2.error ?? 'Sync failed')
+              } else if (p2.status === 'idle') {
+                clearInterval(poll)
+                setSyncing(false)
+                setSyncProgress(null)
+              }
+            } catch { /* ignore */ }
+          }, 1000)
+        }
+      })
+      .catch(() => { /* ignore */ })
   }, [])
 
   async function handleSave() {
