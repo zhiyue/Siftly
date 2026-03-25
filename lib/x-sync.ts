@@ -41,7 +41,7 @@ export async function syncBookmarks(
     let imported = 0
     let skipped = 0
     let cursor: string | undefined
-    const MAX_PAGES = 50
+    const MAX_PAGES = 200
 
     for (let page = 0; page < MAX_PAGES; page++) {
       _syncProgress.page = page + 1
