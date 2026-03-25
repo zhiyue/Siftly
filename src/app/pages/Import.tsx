@@ -904,15 +904,15 @@ function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void 
       .catch(() => setError('Failed to load config'))
       .finally(() => setLoading(false))
 
-    // Check if a sync session has pending chunks (navigated away and back)
+    // Check if a sync is in progress or has pending chunks
     fetch('/api/import/live/sync')
       .then(async (r) => {
         const p = await r.json() as { status: string; page: number; imported: number; skipped: number; hasMore: boolean }
-        if (p.status === 'syncing' && p.hasMore) {
-          // Resume the chunked sync
+        if (p.status === 'syncing' || (p.status !== 'idle' && p.status !== 'error' && p.status !== 'done' && p.hasMore)) {
           setSyncing(true)
           setSyncProgress({ page: p.page, imported: p.imported, skipped: p.skipped })
-          runSyncLoop(true)
+          // Poll GET until current chunk finishes, then auto-continue
+          pollAndResume()
         }
       })
       .catch(() => { /* ignore */ })
@@ -1001,6 +1001,35 @@ function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void 
       setSyncProgress(null)
       setError(err instanceof Error ? err.message : 'Sync failed')
     }
+  }
+
+  function pollAndResume() {
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch('/api/import/live/sync')
+        const p = await r.json() as { status: string; page: number; imported: number; skipped: number; hasMore: boolean; error?: string }
+        setSyncProgress({ page: p.page, imported: p.imported, skipped: p.skipped })
+
+        if (p.status === 'syncing') return // still running, keep polling
+
+        clearInterval(poll)
+
+        if (p.status === 'done' || !p.hasMore) {
+          setSyncing(false)
+          setLastSync(new Date().toISOString())
+          if (p.imported > 0 || p.skipped > 0) {
+            setSuccess(`Synced: ${p.imported} imported, ${p.skipped} skipped`)
+          }
+          setSyncProgress(null)
+        } else if (p.status === 'error') {
+          setSyncing(false)
+          setSyncProgress(null)
+          setError(p.error ?? 'Sync failed')
+        } else if (p.hasMore) {
+          runSyncLoop(true)
+        }
+      } catch { /* ignore */ }
+    }, 1000)
   }
 
   async function handleDisconnect() {
