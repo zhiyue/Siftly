@@ -904,37 +904,15 @@ function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void 
       .catch(() => setError('Failed to load config'))
       .finally(() => setLoading(false))
 
-    // Check if a sync is already running (e.g., navigated away and back)
+    // Check if a sync session has pending chunks (navigated away and back)
     fetch('/api/import/live/sync')
       .then(async (r) => {
-        const p = await r.json() as { status: string; page: number; imported: number; skipped: number; error?: string }
-        if (p.status === 'syncing') {
+        const p = await r.json() as { status: string; page: number; imported: number; skipped: number; hasMore: boolean }
+        if (p.status === 'syncing' && p.hasMore) {
+          // Resume the chunked sync
           setSyncing(true)
           setSyncProgress({ page: p.page, imported: p.imported, skipped: p.skipped })
-          // Start polling
-          const poll = setInterval(async () => {
-            try {
-              const r2 = await fetch('/api/import/live/sync')
-              const p2 = await r2.json() as { status: string; page: number; imported: number; skipped: number; error?: string }
-              setSyncProgress({ page: p2.page, imported: p2.imported, skipped: p2.skipped })
-              if (p2.status === 'done') {
-                clearInterval(poll)
-                setSyncing(false)
-                setLastSync(new Date().toISOString())
-                setSuccess(`Synced: ${p2.imported} imported, ${p2.skipped} skipped`)
-                setSyncProgress(null)
-              } else if (p2.status === 'error') {
-                clearInterval(poll)
-                setSyncing(false)
-                setSyncProgress(null)
-                setError(p2.error ?? 'Sync failed')
-              } else if (p2.status === 'idle') {
-                clearInterval(poll)
-                setSyncing(false)
-                setSyncProgress(null)
-              }
-            } catch { /* ignore */ }
-          }, 1000)
+          runSyncLoop(true)
         }
       })
       .catch(() => { /* ignore */ })
@@ -979,43 +957,49 @@ function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void 
     setSuccess('')
     setSyncing(true)
     setSyncProgress(null)
+    await runSyncLoop(false)
+  }
+
+  async function runSyncLoop(resume: boolean) {
     try {
-      const res = await fetch('/api/import/live/sync', { method: 'POST' })
-      const data = await res.json() as { error?: string; status?: string }
+      const res = await fetch('/api/import/live/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resume }),
+      })
+      const data = await res.json() as {
+        error?: string
+        imported?: number
+        skipped?: number
+        hasMore?: boolean
+      }
       if (!res.ok) throw new Error(data.error ?? 'Sync failed')
 
-      // Poll for progress
-      const poll = setInterval(async () => {
-        try {
-          const r = await fetch('/api/import/live/sync')
-          const p = await r.json() as { status: string; page: number; imported: number; skipped: number; error?: string }
-          setSyncProgress({ page: p.page, imported: p.imported, skipped: p.skipped })
+      // Update progress from the GET endpoint (has cumulative totals)
+      const progressRes = await fetch('/api/import/live/sync')
+      const progress = await progressRes.json() as { status: string; page: number; imported: number; skipped: number }
+      setSyncProgress({ page: progress.page, imported: progress.imported, skipped: progress.skipped })
 
-          if (p.status === 'done') {
-            clearInterval(poll)
-            setSyncing(false)
-            setLastSync(new Date().toISOString())
-            setSuccess(`Synced: ${p.imported} imported, ${p.skipped} skipped`)
-            setSyncProgress(null)
-            onSynced({
-              imported: p.imported,
-              skipped: p.skipped,
-              total: p.imported + p.skipped,
-              parsed: p.imported + p.skipped,
-            })
-          } else if (p.status === 'error') {
-            clearInterval(poll)
-            setSyncing(false)
-            setSyncProgress(null)
-            setError(p.error ?? 'Sync failed')
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, 1000)
+      if (data.hasMore) {
+        // Auto-continue with next chunk
+        await runSyncLoop(true)
+      } else {
+        // Done
+        setSyncing(false)
+        setLastSync(new Date().toISOString())
+        setSuccess(`Synced: ${progress.imported} imported, ${progress.skipped} skipped`)
+        setSyncProgress(null)
+        onSynced({
+          imported: progress.imported,
+          skipped: progress.skipped,
+          total: progress.imported + progress.skipped,
+          parsed: progress.imported + progress.skipped,
+        })
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sync failed')
       setSyncing(false)
+      setSyncProgress(null)
+      setError(err instanceof Error ? err.message : 'Sync failed')
     }
   }
 

@@ -3,106 +3,124 @@ import { settings } from '@/lib/schema'
 import { fetchPage, parsePage, importTweets } from '@/lib/twitter-api'
 import type { AppDb } from '@/lib/db'
 
-// ── Sync ────────────────────────────────────────────────────────────────────────
+// ── Progress tracking ────────────────────────────────────────────────────────
 
 export interface SyncProgress {
   status: 'idle' | 'syncing' | 'done' | 'error'
   page: number
   imported: number
   skipped: number
+  hasMore: boolean
   error?: string
 }
 
-const _syncProgress: SyncProgress = {
-  status: 'idle',
-  page: 0,
-  imported: 0,
-  skipped: 0,
+const _progress: SyncProgress = {
+  status: 'idle', page: 0, imported: 0, skipped: 0, hasMore: false,
 }
 
 export function getSyncProgress(): SyncProgress {
-  return { ..._syncProgress }
+  return { ..._progress }
 }
 
-export async function syncBookmarks(
+// ── Chunked sync ─────────────────────────────────────────────────────────────
+
+const PAGES_PER_CHUNK = 20
+
+// Cursor persists between chunks within a sync session
+let _cursor: string | undefined
+let syncing = false
+
+/**
+ * Sync one chunk of pages. Returns hasMore=true if there are more pages.
+ * Client calls repeatedly until hasMore=false.
+ *
+ * @param resume - true to continue from last cursor, false to start fresh
+ */
+export async function syncChunk(
   db: AppDb,
   authToken: string,
   ct0: string,
-): Promise<{ imported: number; skipped: number }> {
+  resume = false,
+): Promise<{ imported: number; skipped: number; hasMore: boolean }> {
   if (syncing) throw new Error('A sync is already in progress')
   syncing = true
-  _syncProgress.status = 'syncing'
-  _syncProgress.page = 0
-  _syncProgress.imported = 0
-  _syncProgress.skipped = 0
-  _syncProgress.error = undefined
+
+  if (!resume) {
+    _cursor = undefined
+    _progress.page = 0
+    _progress.imported = 0
+    _progress.skipped = 0
+    _progress.hasMore = false
+    _progress.error = undefined
+  }
+  _progress.status = 'syncing'
 
   try {
-    let imported = 0
-    let skipped = 0
-    let cursor: string | undefined
-    const MAX_PAGES = 200
+    let chunkImported = 0
+    let chunkSkipped = 0
+    let hasMore = false
 
-    for (let page = 0; page < MAX_PAGES; page++) {
-      _syncProgress.page = page + 1
-      console.log(`[x-sync] Fetching page ${page + 1}...`)
+    for (let i = 0; i < PAGES_PER_CHUNK; i++) {
+      _progress.page++
+      console.log(`[x-sync] Fetching page ${_progress.page}...`)
 
-      const data = await fetchPage(authToken, ct0, cursor)
+      const data = await fetchPage(authToken, ct0, _cursor)
       const { tweets, nextCursor } = parsePage(data)
 
-      console.log(`[x-sync] Page ${page + 1}: ${tweets.length} tweets, nextCursor=${!!nextCursor}`)
+      console.log(`[x-sync] Page ${_progress.page}: ${tweets.length} tweets, nextCursor=${!!nextCursor}`)
 
-      // On the first page, verify the API response structure hasn't changed
-      if (page === 0 && tweets.length === 0 && !nextCursor) {
+      if (_progress.page === 1 && tweets.length === 0 && !nextCursor) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const hasTimeline = (data as any)?.data?.bookmark_timeline_v2?.timeline
         if (!hasTimeline) {
-          throw new Error('Twitter API response format has changed. The sync feature may need updating.')
+          throw new Error('Twitter API response format has changed.')
         }
       }
 
       const result = await importTweets(db, tweets)
-      imported += result.imported
-      skipped += result.skipped
-      _syncProgress.imported = imported
-      _syncProgress.skipped = skipped
+      chunkImported += result.imported
+      chunkSkipped += result.skipped
+      _progress.imported += result.imported
+      _progress.skipped += result.skipped
 
-      console.log(`[x-sync] Page ${page + 1} done: +${result.imported} imported, +${result.skipped} skipped (total: ${imported}/${skipped})`)
+      console.log(`[x-sync] Page ${_progress.page}: +${result.imported} imported, +${result.skipped} skipped (total: ${_progress.imported}/${_progress.skipped})`)
 
       if (!nextCursor || tweets.length === 0) {
-        console.log(`[x-sync] Pagination ended: nextCursor=${!!nextCursor}, tweets=${tweets.length}`)
+        hasMore = false
+        _cursor = undefined
         break
       }
-      cursor = nextCursor
-
-      if (page === MAX_PAGES - 1) {
-        console.warn(`[x-sync] Hit max page limit (${MAX_PAGES}), stopping pagination`)
-      }
+      _cursor = nextCursor
+      hasMore = true
     }
 
-    // Only update last sync timestamp if we actually fetched tweets
-    if (imported > 0 || skipped > 0) {
-      const now = new Date().toISOString()
-      await db
-        .insert(settings)
-        .values({ key: 'x_last_sync', value: now })
-        .onConflictDoUpdate({ target: settings.key, set: { value: now } })
+    _progress.hasMore = hasMore
+
+    // Update last sync timestamp
+    const now = new Date().toISOString()
+    await db
+      .insert(settings)
+      .values({ key: 'x_last_sync', value: now })
+      .onConflictDoUpdate({ target: settings.key, set: { value: now } })
+
+    if (!hasMore) {
+      _progress.status = 'done'
+      console.log(`[x-sync] Sync complete: ${_progress.imported} imported, ${_progress.skipped} skipped`)
     }
 
-    _syncProgress.status = 'done'
-    console.log(`[x-sync] Sync complete: ${imported} imported, ${skipped} skipped`)
-    return { imported, skipped }
+    return { imported: chunkImported, skipped: chunkSkipped, hasMore }
   } catch (err) {
-    _syncProgress.status = 'error'
-    _syncProgress.error = err instanceof Error ? err.message : String(err)
-    console.error(`[x-sync] Sync error:`, _syncProgress.error)
+    _progress.status = 'error'
+    _progress.error = err instanceof Error ? err.message : String(err)
+    _cursor = undefined
+    console.error(`[x-sync] Sync error:`, _progress.error)
     throw err
   } finally {
     syncing = false
   }
 }
 
-// ── Scheduler ───────────────────────────────────────────────────────────────────
+// ── Scheduler ───────────────────────────────────────────────────────────────
 
 type SyncInterval = '1h' | '4h' | '8h' | '24h'
 
@@ -114,29 +132,19 @@ const INTERVAL_MS: Record<SyncInterval, number> = {
 }
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
-let syncing = false
-
-// Store the db reference for the scheduler to use
 let _schedulerDb: AppDb | null = null
 
 export async function startScheduler(db: AppDb) {
   stopScheduler()
   _schedulerDb = db
 
-  const rows = await db
-    .select()
-    .from(settings)
-    .where(eq(settings.key, 'x_sync_interval'))
-    .limit(1)
+  const rows = await db.select().from(settings).where(eq(settings.key, 'x_sync_interval')).limit(1)
   const intervalValue = rows[0]?.value
   if (!intervalValue || intervalValue === 'off') return
 
   const interval = intervalValue as SyncInterval
   const ms = INTERVAL_MS[interval]
-  if (!ms) {
-    console.warn(`[x-sync] Invalid sync interval "${intervalValue}" in database, not starting scheduler`)
-    return
-  }
+  if (!ms) return
 
   schedulerTimer = setInterval(() => void runScheduledSync(), ms)
   console.log(`[x-sync] Scheduler started: every ${interval}`)
@@ -147,7 +155,6 @@ export function stopScheduler() {
     clearInterval(schedulerTimer)
     schedulerTimer = null
     _schedulerDb = null
-    console.log('[x-sync] Scheduler stopped')
   }
 }
 
@@ -160,29 +167,22 @@ async function runScheduledSync() {
       db.select().from(settings).where(eq(settings.key, 'x_auth_token')).limit(1),
       db.select().from(settings).where(eq(settings.key, 'x_ct0')).limit(1),
     ])
+    if (!authRows[0]?.value || !ct0Rows[0]?.value) return
 
-    if (!authRows[0]?.value || !ct0Rows[0]?.value) {
-      console.log('[x-sync] Skipping scheduled sync: missing credentials')
-      return
+    // Chunked: keep going until done
+    let hasMore = true
+    let first = true
+    while (hasMore) {
+      const r = await syncChunk(db, authRows[0].value, ct0Rows[0].value, !first)
+      hasMore = r.hasMore
+      first = false
     }
-
-    console.log(`[x-sync] Running scheduled sync at ${new Date().toISOString()}`)
-    const result = await syncBookmarks(db, authRows[0].value, ct0Rows[0].value)
-    console.log(`[x-sync] Sync complete: ${result.imported} imported, ${result.skipped} skipped`)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error('[x-sync] Scheduled sync failed:', message)
-    if (message.includes('401') || message.includes('403')) {
-      console.error('[x-sync] Auth error detected, stopping scheduler')
-      stopScheduler()
-    }
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[x-sync] Scheduled sync failed:', msg)
+    if (msg.includes('401') || msg.includes('403')) stopScheduler()
   }
 }
 
-export function isSchedulerRunning() {
-  return schedulerTimer !== null
-}
-
-export function isSyncing() {
-  return syncing
-}
+export function isSchedulerRunning() { return schedulerTimer !== null }
+export function isSyncing() { return syncing }

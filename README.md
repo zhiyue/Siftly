@@ -8,9 +8,13 @@
   <p>Import · Analyze · Categorize · Search · Explore</p>
 
   <p>
-    <img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js" alt="Next.js 16" />
+    <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/viperrcrypto/Siftly"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" /></a>
+  </p>
+
+  <p>
+    <img src="https://img.shields.io/badge/Cloudflare_Workers-orange?style=flat-square&logo=cloudflare" alt="Cloudflare Workers" />
     <img src="https://img.shields.io/badge/TypeScript-5-blue?style=flat-square&logo=typescript" alt="TypeScript" />
-    <img src="https://img.shields.io/badge/SQLite-local-green?style=flat-square&logo=sqlite" alt="SQLite" />
+    <img src="https://img.shields.io/badge/D1-SQLite-green?style=flat-square&logo=cloudflare" alt="D1 SQLite" />
     <img src="https://img.shields.io/badge/Tailwind-v4-38bdf8?style=flat-square&logo=tailwindcss" alt="Tailwind CSS" />
     <img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="MIT License" />
   </p>
