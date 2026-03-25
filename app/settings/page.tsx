@@ -23,8 +23,12 @@ import {
 } from 'lucide-react'
 
 const ANTHROPIC_MODELS = [
-  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fast & Cheap' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (Official)', description: 'Fast & Cheap' },
+  { value: 'claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fast & Cheap' },
+  { value: 'claude-sonnet-4-5', label: 'Sonnet 4.5', description: 'Smart & Balanced' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6', description: 'Smart & Balanced' },
+  { value: 'claude-opus-4', label: 'Opus 4', description: 'Most Capable' },
+  { value: 'claude-opus-4-5', label: 'Opus 4.5', description: 'Most Capable' },
   { value: 'claude-opus-4-6', label: 'Opus 4.6', description: 'Most Capable' },
 ]
 

@@ -6,7 +6,7 @@ import { Upload, CheckCircle, ChevronRight, Loader2, Copy, Check, ExternalLink, 
 import * as Progress from '@radix-ui/react-progress'
 
 type Step = 1 | 2 | 3
-type Method = 'bookmarklet' | 'console' | 'live'
+type Method = 'bookmarklet' | 'console' | 'live' | 'cookie'
 
 interface ImportResult {
   imported: number
@@ -667,6 +667,264 @@ function ConsoleTab({ onFile, importSource }: { onFile: (file: File) => void; im
   )
 }
 
+// ── Cookie Sync Tab ──────────────────────────────────────────────────────────
+
+interface CookieStatus {
+  hasCredentials: boolean
+  syncInterval: string
+  lastSync: string | null
+  schedulerRunning: boolean
+}
+
+function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void }) {
+  const [status, setStatus] = useState<CookieStatus | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [authToken, setAuthToken] = useState('')
+  const [ct0, setCt0] = useState('')
+  const [syncInterval, setSyncInterval] = useState('off')
+  const [syncMode, setSyncMode] = useState<'incremental' | 'full'>('incremental')
+  const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  useEffect(() => {
+    fetch('/api/import/live')
+      .then(async (r) => {
+        if (!r.ok) throw new Error('Failed to load status')
+        const data: CookieStatus = await r.json()
+        setStatus(data)
+        setSyncInterval(data.syncInterval)
+      })
+      .catch(() => setError('Could not load sync status'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function handleSave() {
+    setError('')
+    setSuccess('')
+    setSaving(true)
+    try {
+      const payload: Record<string, string> = { syncInterval }
+      if (authToken.trim() && ct0.trim()) {
+        payload.authToken = authToken.trim()
+        payload.ct0 = ct0.trim()
+      }
+      const res = await fetch('/api/import/live', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Save failed')
+      setStatus((prev) => prev ? { ...prev, hasCredentials: !!(authToken.trim() && ct0.trim()) || prev.hasCredentials, syncInterval } : prev)
+      setAuthToken('')
+      setCt0('')
+      setSuccess('Saved')
+      setTimeout(() => setSuccess(''), 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleSync() {
+    setError('')
+    setSuccess('')
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/import/live/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: syncMode }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Sync failed')
+      onSynced({ imported: data.imported ?? 0, skipped: data.skipped ?? 0, total: (data.imported ?? 0) + (data.skipped ?? 0), parsed: (data.imported ?? 0) + (data.skipped ?? 0) })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function handleDelete() {
+    setError('')
+    setDeleting(true)
+    try {
+      const res = await fetch('/api/import/live', { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete')
+      setStatus({ hasCredentials: false, syncInterval: 'off', lastSync: null, schedulerRunning: false })
+      setSyncInterval('off')
+      setSuccess('Credentials removed')
+      setTimeout(() => setSuccess(''), 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 size={20} className="animate-spin text-zinc-500" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="text-xs text-zinc-500 space-y-1.5 bg-zinc-800/50 border border-zinc-700/50 rounded-xl p-4">
+        <p className="text-zinc-300 font-medium text-sm mb-2 flex items-center gap-2">
+          <KeyRound size={14} className="text-amber-400" />
+          Cookie Sync
+        </p>
+        <p>Paste your X/Twitter <code className="text-zinc-400">auth_token</code> and <code className="text-zinc-400">ct0</code> cookies to sync bookmarks directly. No developer account needed.</p>
+        <p className="text-zinc-600 mt-1">Open x.com → DevTools → Application → Cookies → copy auth_token and ct0 values.</p>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-red-500/8 border border-red-500/20">
+          <AlertCircle size={15} className="text-red-400 shrink-0" />
+          <p className="text-sm text-red-300">{error}</p>
+        </div>
+      )}
+
+      {success && (
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-emerald-500/8 border border-emerald-500/20">
+          <CheckCircle size={15} className="text-emerald-400 shrink-0" />
+          <p className="text-sm text-emerald-300">{success}</p>
+        </div>
+      )}
+
+      {/* Status */}
+      {status?.hasCredentials && (
+        <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-800/50 border border-zinc-700/50">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="text-sm text-zinc-300">Credentials saved</span>
+            {status.lastSync && (
+              <span className="text-xs text-zinc-500 ml-2">
+                <Clock size={11} className="inline -mt-0.5 mr-0.5" />
+                Last sync: {new Date(status.lastSync).toLocaleString()}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1"
+          >
+            {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+            Remove
+          </button>
+        </div>
+      )}
+
+      {/* Credential inputs */}
+      {!status?.hasCredentials && (
+        <div className="space-y-3">
+          <input
+            type="password"
+            placeholder="auth_token"
+            value={authToken}
+            onChange={(e) => setAuthToken(e.target.value)}
+            className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-sm text-zinc-200 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none"
+          />
+          <input
+            type="password"
+            placeholder="ct0"
+            value={ct0}
+            onChange={(e) => setCt0(e.target.value)}
+            className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-sm text-zinc-200 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none"
+          />
+        </div>
+      )}
+
+      {/* Sync interval */}
+      <div className="flex items-center gap-3">
+        <label className="text-sm text-zinc-400 shrink-0">Auto-sync:</label>
+        <select
+          value={syncInterval}
+          onChange={(e) => setSyncInterval(e.target.value)}
+          className="flex-1 px-3 py-2 rounded-xl bg-zinc-800 border border-zinc-700 text-sm text-zinc-200 focus:border-indigo-500 focus:outline-none"
+        >
+          <option value="off">Off</option>
+          <option value="1h">Every 1 hour</option>
+          <option value="4h">Every 4 hours</option>
+          <option value="8h">Every 8 hours</option>
+          <option value="24h">Every 24 hours</option>
+        </select>
+      </div>
+
+      {/* Sync mode */}
+      {status?.hasCredentials && (
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-zinc-400 shrink-0">Sync mode:</label>
+          <div className="flex gap-1 flex-1 p-0.5 bg-zinc-800 rounded-lg">
+            <button
+              onClick={() => setSyncMode('incremental')}
+              className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                syncMode === 'incremental'
+                  ? 'bg-zinc-700 text-zinc-100'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              Incremental
+            </button>
+            <button
+              onClick={() => setSyncMode('full')}
+              className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                syncMode === 'full'
+                  ? 'bg-zinc-700 text-zinc-100'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              Full Sync
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Buttons */}
+      <div className="flex gap-3">
+        {!status?.hasCredentials ? (
+          <button
+            onClick={handleSave}
+            disabled={saving || !authToken.trim() || !ct0.trim()}
+            className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-sm font-medium text-white transition-colors flex items-center justify-center gap-2"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
+            Save & Connect
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex-1 py-2.5 rounded-xl bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 text-sm font-medium text-zinc-200 transition-colors flex items-center justify-center gap-2"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+              Save Settings
+            </button>
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className={`flex-1 py-2.5 rounded-xl ${syncMode === 'full' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-indigo-600 hover:bg-indigo-500'} disabled:bg-zinc-700 disabled:text-zinc-500 text-sm font-medium text-white transition-colors flex items-center justify-center gap-2`}
+            >
+              {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              {syncing ? 'Syncing...' : syncMode === 'full' ? 'Full Sync' : 'Sync Now'}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Live Import Tab (OAuth 2.0 PKCE) ─────────────────────────────────────────
 
 interface OAuthStatus {
@@ -909,6 +1167,17 @@ function InstructionsStep({ onFile, importSource, onLiveSynced }: { onFile: (fil
           Bookmarklet
         </button>
         <button
+          onClick={() => setMethod('cookie')}
+          className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+            method === 'cookie'
+              ? 'bg-zinc-900 text-zinc-100 shadow-sm'
+              : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          <KeyRound size={13} className="inline -mt-0.5 mr-1" />
+          Cookie Sync
+        </button>
+        <button
           onClick={() => setMethod('console')}
           className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
             method === 'console'
@@ -922,6 +1191,8 @@ function InstructionsStep({ onFile, importSource, onLiveSynced }: { onFile: (fil
 
       {method === 'live' ? (
         <LiveImportTab onSynced={onLiveSynced} />
+      ) : method === 'cookie' ? (
+        <CookieSyncTab onSynced={onLiveSynced} />
       ) : method === 'bookmarklet' ? (
         <BookmarkletTab onFile={onFile} importSource={importSource} />
       ) : (

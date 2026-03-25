@@ -1,12 +1,20 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
-import { syncBookmarks, isSyncing } from '@/lib/x-sync'
+import { syncBookmarks, isSyncing, type SyncMode } from '@/lib/x-sync'
 
-/** POST — trigger a manual sync using stored credentials */
-export async function POST() {
+/** POST — trigger a manual sync using stored credentials
+ *  Body: { mode?: "incremental" | "full" }  (defaults to "incremental")
+ */
+export async function POST(request: NextRequest) {
   if (isSyncing()) {
     return NextResponse.json({ error: 'A sync is already in progress' }, { status: 409 })
   }
+
+  let mode: SyncMode = 'incremental'
+  try {
+    const body = await request.json()
+    if (body.mode === 'full') mode = 'full'
+  } catch { /* empty body is fine, default to incremental */ }
 
   try {
     const [authSetting, ct0Setting] = await Promise.all([
@@ -21,7 +29,7 @@ export async function POST() {
       )
     }
 
-    const result = await syncBookmarks(authSetting.value, ct0Setting.value)
+    const result = await syncBookmarks(authSetting.value, ct0Setting.value, mode)
     return NextResponse.json(result)
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Sync failed'

@@ -9,106 +9,106 @@ const BATCH_SIZE = 20
 
 const DEFAULT_CATEGORIES = [
   {
-    name: 'AI & Machine Learning',
+    name: 'AI 与机器学习',
     slug: 'ai-resources',
     color: '#8b5cf6',
     description:
-      'Artificial intelligence, machine learning, LLMs, ChatGPT, Claude, Gemini, Grok, Midjourney, Sora, AI agents, RAG, fine-tuning, prompts, vector databases, model benchmarks, AI startups, AI safety, multimodal models',
+      '人工智能、机器学习、大语言模型、ChatGPT、Claude、Gemini、Grok、Midjourney、Sora、AI Agent、RAG、微调、提示词工程、向量数据库、模型评测、AI 创业、AI 安全、多模态模型',
     isAiGenerated: false,
   },
   {
-    name: 'Crypto & Web3',
+    name: '加密货币与 Web3',
     slug: 'finance-crypto',
     color: '#f59e0b',
     description:
-      'Cryptocurrency, Bitcoin, Ethereum, Solana, DeFi protocols, NFTs, on-chain activity, crypto trading, altcoins, airdrops, memecoin, Web3 development, smart contracts, DAOs, Layer 2, Uniswap, pump.fun, wallets, blockchain analytics',
+      '加密货币、比特币、以太坊、Solana、DeFi 协议、NFT、链上活动、加密交易、山寨币、空投、Meme 币、Web3 开发、智能合约、DAO、Layer 2、Uniswap、pump.fun、钱包、区块链分析',
     isAiGenerated: false,
   },
   {
-    name: 'Dev Tools & Engineering',
+    name: '开发工具与工程',
     slug: 'dev-tools',
     color: '#06b6d4',
     description:
-      'Software engineering, coding, GitHub, open source, frameworks, APIs, databases, DevOps, CI/CD, terminal tools, debugging, system design, backend, frontend, mobile dev, Rust, Go, TypeScript, Python, Vercel, Supabase, Docker',
+      '软件工程、编程、GitHub、开源、框架、API、数据库、DevOps、CI/CD、终端工具、调试、系统设计、后端、前端、移动开发、Rust、Go、TypeScript、Python、Vercel、Supabase、Docker',
     isAiGenerated: false,
   },
   {
-    name: 'Finance & Investing',
+    name: '金融与投资',
     slug: 'finance-investing',
     color: '#10b981',
     description:
-      'Stock market, equities, options trading, macroeconomics, Federal Reserve, interest rates, hedge funds, venture capital, private equity, earnings reports, portfolio management, real estate investing, commodities, forex, financial charts — NOT crypto',
+      '股票市场、期权交易、宏观经济、美联储、利率、对冲基金、风险投资、私募股权、财报分析、投资组合管理、房地产投资、大宗商品、外汇、金融图表——不包括加密货币',
     isAiGenerated: false,
   },
   {
-    name: 'Startups & Business',
+    name: '创业与商业',
     slug: 'startups-business',
     color: '#f97316',
     description:
-      'Startups, founders, entrepreneurship, SaaS, product-market fit, fundraising, VC, angel investing, growth hacking, B2B, marketing, sales, revenue, bootstrapping, Y Combinator, acquisition, company building, business strategy',
+      '创业、创始人、创业精神、SaaS、产品市场契合、融资、风投、天使投资、增长黑客、B2B、营销、销售、收入、自力更生创业、Y Combinator、收购、公司建设、商业策略',
     isAiGenerated: false,
   },
   {
-    name: 'News & Politics',
+    name: '新闻与政治',
     slug: 'news',
     color: '#6366f1',
     description:
-      'Breaking news, current events, US politics, global politics, geopolitics, government policy, elections, regulation, tech policy, AI regulation, crypto regulation, war and conflict, international relations, journalism, investigative reporting',
+      '突发新闻、时事、美国政治、全球政治、地缘政治、政府政策、选举、监管、科技政策、AI 监管、加密货币监管、战争与冲突、国际关系、新闻报道、调查报道',
     isAiGenerated: false,
   },
   {
-    name: 'Design & Product',
+    name: '设计与产品',
     slug: 'design',
     color: '#ec4899',
     description:
-      'UI/UX design, product design, visual design, Figma, typography, design systems, motion design, brand identity, user research, product strategy, wireframes, creative tools, color theory, web design, app design',
+      'UI/UX 设计、产品设计、视觉设计、Figma、字体排版、设计系统、动效设计、品牌标识、用户研究、产品策略、线框图、创意工具、配色理论、网页设计、应用设计',
     isAiGenerated: false,
   },
   {
-    name: 'Health & Wellness',
+    name: '健康与生活',
     slug: 'health-wellness',
     color: '#14b8a6',
     description:
-      'Fitness, nutrition, longevity, biohacking, sleep, mental health, supplements, workout routines, diet, weight loss, strength training, cognitive performance, stress management, meditation, gut health, lab results, wearables like Whoop and Oura',
+      '健身、营养、长寿、生物黑客、睡眠、心理健康、补剂、锻炼计划、饮食、减脂、力量训练、认知表现、压力管理、冥想、肠道健康、体检报告、Whoop/Oura 等可穿戴设备',
     isAiGenerated: false,
   },
   {
-    name: 'Security & Privacy',
+    name: '安全与隐私',
     slug: 'security-privacy',
     color: '#ef4444',
     description:
-      'Cybersecurity, hacking, exploits, vulnerabilities, OPSEC, privacy tools, VPNs, encryption, threat intelligence, social engineering, phishing, malware, zero-days, pen testing, CTF, data breaches, authentication, identity security',
+      '网络安全、黑客、漏洞利用、安全漏洞、OPSEC、隐私工具、VPN、加密、威胁情报、社会工程、钓鱼攻击、恶意软件、零日漏洞、渗透测试、CTF、数据泄露、身份认证、身份安全',
     isAiGenerated: false,
   },
   {
-    name: 'Science & Research',
+    name: '科学与研究',
     slug: 'science-research',
     color: '#3b82f6',
     description:
-      'Scientific research, papers, discoveries, physics, biology, neuroscience, space exploration, climate, chemistry, medical breakthroughs, academic studies, emerging technology, robotics, quantum computing, energy, materials science',
+      '科学研究、论文、发现、物理、生物、神经科学、太空探索、气候、化学、医学突破、学术研究、前沿技术、机器人、量子计算、能源、材料科学',
     isAiGenerated: false,
   },
   {
-    name: 'Productivity',
+    name: '效率与工具',
     slug: 'productivity',
     color: '#a855f7',
     description:
-      'Productivity systems, time management, habits, focus techniques, note-taking, second brain, deep work, mental models, PKM tools like Obsidian and Notion, life optimization, workflows, automation, delegation',
+      '生产力系统、时间管理、习惯养成、专注技巧、笔记方法、第二大脑、深度工作、心智模型、Obsidian/Notion 等知识管理工具、生活优化、工作流、自动化、委派',
     isAiGenerated: false,
   },
   {
-    name: 'Funny & Memes',
+    name: '搞笑与梗图',
     slug: 'funny-memes',
     color: '#eab308',
     description:
-      'Memes, jokes, satire, humor, viral content, relatable posts, shitposts, funny screenshots, comedy threads, parody, ironic takes — content whose primary purpose is to be funny or entertaining',
+      '表情包、段子、讽刺、幽默、病毒式传播内容、共鸣帖子、搞笑截图、喜剧话题、模仿、反讽——以搞笑或娱乐为主要目的的内容',
     isAiGenerated: false,
   },
   {
-    name: 'General',
+    name: '综合',
     slug: 'general',
     color: '#64748b',
-    description: "Miscellaneous content that doesn't clearly fit any other category — use sparingly, only when no other category applies",
+    description: '不明确属于其他任何分类的杂项内容——谨慎使用，仅在没有其他分类适用时才选择',
     isAiGenerated: false,
   },
 ] as const

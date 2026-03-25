@@ -10,8 +10,12 @@ function maskKey(raw: string | null): string | null {
 
 const ALLOWED_ANTHROPIC_MODELS = [
   'claude-haiku-4-5-20251001',
+  'claude-haiku-4-5',
   'claude-sonnet-4-6',
+  'claude-sonnet-4-5',
   'claude-opus-4-6',
+  'claude-opus-4-5',
+  'claude-opus-4',
 ] as const
 
 const ALLOWED_OPENAI_MODELS = [

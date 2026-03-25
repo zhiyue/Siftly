@@ -22,12 +22,12 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Install production deps (includes prisma + better-sqlite3, rebuilt for this image)
+# Install production deps (better-sqlite3 rebuilt for this image)
 COPY package*.json ./
 COPY prisma ./prisma
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev && npm install prisma@7
 
-# Re-generate Prisma client in runner stage
+# Generate Prisma client in runner stage
 RUN node_modules/.bin/prisma generate
 
 # Copy built Next.js output

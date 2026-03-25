@@ -3,10 +3,13 @@ import { fetchPage, parsePage, importTweets } from '@/lib/twitter-api'
 
 // ── Sync ────────────────────────────────────────────────────────────────────────
 
+export type SyncMode = 'incremental' | 'full'
+
 export async function syncBookmarks(
   authToken: string,
   ct0: string,
-): Promise<{ imported: number; skipped: number }> {
+  mode: SyncMode = 'incremental',
+): Promise<{ imported: number; skipped: number; pages: number; mode: SyncMode }> {
   if (syncing) throw new Error('A sync is already in progress')
   syncing = true
 
@@ -14,7 +17,8 @@ export async function syncBookmarks(
     let imported = 0
     let skipped = 0
     let cursor: string | undefined
-    const MAX_PAGES = 50
+    let consecutiveSkipPages = 0
+    const MAX_PAGES = mode === 'full' ? 200 : 50
 
     for (let page = 0; page < MAX_PAGES; page++) {
       const data = await fetchPage(authToken, ct0, cursor)
@@ -33,6 +37,20 @@ export async function syncBookmarks(
       imported += result.imported
       skipped += result.skipped
 
+      // Incremental mode: bookmarks are reverse-chronological.
+      // If an entire page was skipped, all subsequent pages are older.
+      // Use 2 consecutive skip pages as threshold (like Twillot) to be safe
+      // against edge cases like deleted bookmarks leaving gaps.
+      if (mode === 'incremental' && result.imported === 0 && tweets.length > 0) {
+        consecutiveSkipPages++
+        if (consecutiveSkipPages >= 2) {
+          console.log(`[x-sync] Incremental: ${consecutiveSkipPages} consecutive pages fully skipped, stopping early at page ${page + 1}`)
+          break
+        }
+      } else {
+        consecutiveSkipPages = 0
+      }
+
       if (!nextCursor || tweets.length === 0) break
       cursor = nextCursor
 
@@ -41,7 +59,7 @@ export async function syncBookmarks(
       }
     }
 
-    // Only update last sync timestamp if we actually fetched tweets
+    // Update last sync timestamp
     if (imported > 0 || skipped > 0) {
       const now = new Date().toISOString()
       await prisma.setting.upsert({
@@ -51,7 +69,8 @@ export async function syncBookmarks(
       })
     }
 
-    return { imported, skipped }
+    const pages = Math.ceil((imported + skipped) / 100) || 0
+    return { imported, skipped, pages, mode }
   } finally {
     syncing = false
   }
