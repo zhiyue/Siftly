@@ -25,6 +25,10 @@ const ALLOWED_OPENAI_MODELS = [
   'gpt-4.1-nano',
   'o4-mini',
   'o3',
+  'claude-haiku-4-5',
+  'claude-sonnet-4-5',
+  'claude-sonnet-4-6',
+  'claude-opus-4-6',
 ] as const
 
 async function getSetting(db: ReturnType<typeof getDb>, key: string) {
@@ -84,6 +88,8 @@ route.post('/api/settings', async (c) => {
     provider?: string
     openaiApiKey?: string
     openaiModel?: string
+    openaiBaseUrl?: string
+    anthropicBaseUrl?: string
     xOAuthClientId?: string
     xOAuthClientSecret?: string
   } = {}
@@ -155,6 +161,18 @@ route.post('/api/settings', async (c) => {
         500
       )
     }
+  }
+
+  if (body.openaiBaseUrl !== undefined) {
+    await upsertSetting(db, 'openaiBaseUrl', body.openaiBaseUrl.trim())
+    invalidateSettingsCache()
+    return c.json({ saved: true })
+  }
+
+  if (body.anthropicBaseUrl !== undefined) {
+    await upsertSetting(db, 'anthropicBaseUrl', body.anthropicBaseUrl.trim())
+    invalidateSettingsCache()
+    return c.json({ saved: true })
   }
 
   const { xOAuthClientId, xOAuthClientSecret } = body

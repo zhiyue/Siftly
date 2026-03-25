@@ -1,8 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
+import { eq } from 'drizzle-orm'
 import { resolveAnthropicClient } from './claude-cli-auth'
 import { resolveOpenAIClient } from './openai-auth'
 import { getProvider } from './settings'
+import { settings } from './schema'
 import type { AppDb } from './db'
 
 export interface AIContentBlock {
@@ -104,6 +106,7 @@ export async function resolveAIClient(options: {
   db: AppDb
   overrideKey?: string
   dbKey?: string
+  dbBaseUrl?: string
   env?: {
     ANTHROPIC_API_KEY?: string
     OPENAI_API_KEY?: string
@@ -113,10 +116,19 @@ export async function resolveAIClient(options: {
 }): Promise<AIClient> {
   const provider = await getProvider(options.db)
 
+  // Auto-read base URL from DB if not explicitly provided
+  let dbBaseUrl = options.dbBaseUrl
+  if (!dbBaseUrl) {
+    const baseUrlKey = provider === 'openai' ? 'openaiBaseUrl' : 'anthropicBaseUrl'
+    const rows = await options.db.select().from(settings).where(eq(settings.key, baseUrlKey)).limit(1)
+    dbBaseUrl = rows[0]?.value?.trim() || undefined
+  }
+
   if (provider === 'openai') {
     const client = resolveOpenAIClient({
       overrideKey: options.overrideKey,
       dbKey: options.dbKey,
+      baseURL: dbBaseUrl,
       envApiKey: options.env?.OPENAI_API_KEY,
       envBaseURL: options.env?.OPENAI_BASE_URL,
     })
@@ -126,6 +138,7 @@ export async function resolveAIClient(options: {
   const client = resolveAnthropicClient({
     overrideKey: options.overrideKey,
     dbKey: options.dbKey,
+    baseURL: dbBaseUrl,
     envApiKey: options.env?.ANTHROPIC_API_KEY,
     envBaseURL: options.env?.ANTHROPIC_BASE_URL,
   })
