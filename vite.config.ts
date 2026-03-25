@@ -6,9 +6,8 @@ import path from 'path'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   root: '.',
-  publicDir: 'static',
   build: {
-    outDir: 'public',
+    outDir: 'dist',
     emptyOutDir: true,
   },
   resolve: {
