@@ -6,7 +6,7 @@ import { Upload, CheckCircle, ChevronRight, Loader2, Copy, Check, ExternalLink, 
 import * as Progress from '@radix-ui/react-progress'
 
 type Step = 1 | 2 | 3
-type Method = 'bookmarklet' | 'console' | 'live'
+type Method = 'bookmarklet' | 'console' | 'live' | 'cookie'
 
 interface ImportResult {
   imported: number
@@ -879,6 +879,245 @@ function LiveImportTab({ onSynced }: { onSynced: (result: ImportResult) => void 
   )
 }
 
+// ── Cookie Sync Tab ──────────────────────────────────────────────────
+function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void }) {
+  const [authToken, setAuthToken] = useState('')
+  const [ct0, setCt0] = useState('')
+  const [syncInterval, setSyncInterval] = useState('off')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [hasCredentials, setHasCredentials] = useState(false)
+  const [lastSync, setLastSync] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  useEffect(() => {
+    fetch('/api/import/live')
+      .then(async (r) => {
+        const data = await r.json() as { hasCredentials: boolean; syncInterval: string; lastSync: string | null }
+        setHasCredentials(data.hasCredentials)
+        setSyncInterval(data.syncInterval)
+        setLastSync(data.lastSync)
+      })
+      .catch(() => setError('Failed to load config'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function handleSave() {
+    setError('')
+    setSuccess('')
+    setSaving(true)
+    try {
+      const payload: Record<string, string> = {}
+      if (authToken.trim() && ct0.trim()) {
+        payload.authToken = authToken.trim()
+        payload.ct0 = ct0.trim()
+      }
+      payload.syncInterval = syncInterval
+
+      const res = await fetch('/api/import/live', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json() as { saved?: boolean; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Save failed')
+      setHasCredentials(true)
+      setSuccess('Credentials saved')
+      setAuthToken('')
+      setCt0('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleSync() {
+    setError('')
+    setSuccess('')
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/import/live/sync', { method: 'POST' })
+      const data = await res.json() as { error?: string; imported?: number; skipped?: number; total?: number }
+      if (!res.ok) throw new Error(data.error ?? 'Sync failed')
+      setLastSync(new Date().toISOString())
+      setSuccess(`Synced: ${data.imported ?? 0} imported, ${data.skipped ?? 0} skipped`)
+      onSynced({
+        imported: data.imported ?? 0,
+        skipped: data.skipped ?? 0,
+        total: data.total ?? 0,
+        parsed: data.total ?? 0,
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function handleDisconnect() {
+    setError('')
+    try {
+      await fetch('/api/import/live', { method: 'DELETE' })
+      setHasCredentials(false)
+      setSyncInterval('off')
+      setLastSync(null)
+      setSuccess('Credentials removed')
+    } catch {
+      setError('Failed to disconnect')
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-10">
+        <Loader2 size={24} className="text-zinc-500 animate-spin" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-zinc-800/50 rounded-xl p-4 border border-zinc-700/50">
+        <h3 className="text-sm font-semibold text-zinc-200 mb-1">Cookie-based Sync</h3>
+        <p className="text-xs text-zinc-500 mb-4">
+          Paste your X/Twitter cookies to sync bookmarks directly. Open X.com → DevTools → Application → Cookies → copy <code className="bg-zinc-700/50 px-1 rounded">auth_token</code> and <code className="bg-zinc-700/50 px-1 rounded">ct0</code>.
+        </p>
+
+        {hasCredentials ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-sm text-emerald-400">
+              <CheckCircle size={14} />
+              <span>Credentials configured</span>
+            </div>
+
+            {lastSync && (
+              <p className="text-xs text-zinc-500">
+                <Clock size={11} className="inline -mt-0.5 mr-1" />
+                Last sync: {new Date(lastSync).toLocaleString()}
+              </p>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                {syncing ? 'Syncing...' : 'Sync Now'}
+              </button>
+              <button
+                onClick={handleDisconnect}
+                className="px-4 py-2.5 rounded-xl border border-zinc-700 hover:border-red-500/50 hover:bg-red-500/10 text-zinc-400 hover:text-red-400 text-sm transition-all"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+
+            {/* Sync interval */}
+            <div>
+              <label className="text-xs text-zinc-400 mb-1.5 block">Auto-sync interval</label>
+              <div className="flex gap-1.5">
+                {['off', '1h', '4h', '8h', '24h'].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => {
+                      setSyncInterval(v)
+                      fetch('/api/import/live', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ syncInterval: v }),
+                      })
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                      syncInterval === v
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {v === 'off' ? 'Off' : v}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Update credentials */}
+            <details className="group">
+              <summary className="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300 transition-colors">
+                Update credentials
+              </summary>
+              <div className="mt-3 space-y-2">
+                <input
+                  type="password"
+                  placeholder="auth_token"
+                  value={authToken}
+                  onChange={(e) => setAuthToken(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none"
+                />
+                <input
+                  type="password"
+                  placeholder="ct0"
+                  value={ct0}
+                  onChange={(e) => setCt0(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none"
+                />
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !authToken.trim() || !ct0.trim()}
+                  className="w-full px-4 py-2 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-sm text-zinc-200 font-medium transition-colors disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Update'}
+                </button>
+              </div>
+            </details>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <input
+              type="password"
+              placeholder="auth_token"
+              value={authToken}
+              onChange={(e) => setAuthToken(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none"
+            />
+            <input
+              type="password"
+              placeholder="ct0"
+              value={ct0}
+              onChange={(e) => setCt0(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none"
+            />
+            <button
+              onClick={handleSave}
+              disabled={saving || !authToken.trim() || !ct0.trim()}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
+              {saving ? 'Saving...' : 'Save & Connect'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+          <AlertCircle size={14} />
+          {error}
+        </div>
+      )}
+      {success && (
+        <div className="flex items-center gap-2 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
+          <CheckCircle size={14} />
+          {success}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function InstructionsStep({ onFile, importSource, onLiveSynced }: { onFile: (file: File) => void; importSource: 'bookmark' | 'like'; onLiveSynced: (result: ImportResult) => void }) {
   const [method, setMethod] = useState<Method>('bookmarklet')
 
@@ -918,10 +1157,23 @@ function InstructionsStep({ onFile, importSource, onLiveSynced }: { onFile: (fil
         >
           {'</>'} Console
         </button>
+        <button
+          onClick={() => setMethod('cookie')}
+          className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+            method === 'cookie'
+              ? 'bg-zinc-900 text-zinc-100 shadow-sm'
+              : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          <KeyRound size={13} className="inline -mt-0.5 mr-1" />
+          Cookie Sync
+        </button>
       </div>
 
       {method === 'live' ? (
         <LiveImportTab onSynced={onLiveSynced} />
+      ) : method === 'cookie' ? (
+        <CookieSyncTab onSynced={onLiveSynced} />
       ) : method === 'bookmarklet' ? (
         <BookmarkletTab onFile={onFile} importSource={importSource} />
       ) : (
