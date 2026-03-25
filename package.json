@@ -12,7 +12,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "siftly": "tsx cli/siftly.ts"
+    "siftly": "tsx cli/siftly.ts",
+    "siftly-remote": "tsx cli/siftly-remote.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
