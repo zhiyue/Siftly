@@ -468,6 +468,23 @@ async function handleMcpRequest(request: Request): Promise<Response> {
   const authError = await authenticate(request)
   if (authError) return authError
 
+  // Ensure Accept header includes both required types — some MCP clients
+  // (e.g. Claude Code) may not send text/event-stream in Accept, causing
+  // the transport to reject with 406.
+  const accept = request.headers.get('Accept') ?? ''
+  let patchedRequest = request
+  if (!accept.includes('text/event-stream')) {
+    const headers = new Headers(request.headers)
+    headers.set('Accept', 'application/json, text/event-stream')
+    patchedRequest = new Request(request.url, {
+      method: request.method,
+      headers,
+      body: request.body,
+      // @ts-expect-error duplex needed for streaming body in Node
+      duplex: 'half',
+    })
+  }
+
   const server = createServer()
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless
@@ -477,10 +494,9 @@ async function handleMcpRequest(request: Request): Promise<Response> {
   await server.connect(transport)
 
   try {
-    const response = await transport.handleRequest(request)
+    const response = await transport.handleRequest(patchedRequest)
     return response
   } finally {
-    // Clean up after the response is sent
     await transport.close()
     await server.close()
   }
