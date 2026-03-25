@@ -258,13 +258,13 @@ export function extractEntities(rawJson: string): ExtractedEntities {
 export async function backfillEntities(
   db: AppDb,
   onProgress?: (total: number) => void,
-  shouldAbort?: () => boolean,
+  shouldAbort?: () => boolean | Promise<boolean>,
 ): Promise<number> {
   const CHUNK = 100
   let total = 0
 
   while (true) {
-    if (shouldAbort?.()) break
+    if (await shouldAbort?.()) break
     const rows = await db
       .select({ id: bookmarks.id, rawJson: bookmarks.rawJson })
       .from(bookmarks)

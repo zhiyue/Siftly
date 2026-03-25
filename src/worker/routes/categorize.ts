@@ -19,46 +19,36 @@ import {
 } from '@/lib/vision-analyzer'
 import { backfillEntities } from '@/lib/rawjson-extractor'
 import { rebuildFts } from '@/lib/fts'
-import { getPipelineStateManager } from '@/lib/pipeline-state'
 import type { PipelineState } from '@/lib/pipeline-state'
-
-const psm = getPipelineStateManager()
 
 const CAT_BATCH_SIZE = 25
 
 const route = new Hono<{ Bindings: Bindings }>()
 
+/** Get a singleton DO stub from Hono context */
+function getStub(env: Bindings) {
+  const id = env.PIPELINE_DO.idFromName('singleton')
+  return env.PIPELINE_DO.get(id)
+}
+
 // GET /api/categorize — pipeline status
 route.get('/api/categorize', async (c) => {
-  const state = psm.getState()
-  return c.json({
-    status: state.status,
-    stage: state.stage,
-    done: state.done,
-    total: state.total,
-    stageCounts: state.stageCounts,
-    lastError: state.lastError,
-    error: state.error,
-  })
+  const stub = getStub(c.env)
+  const resp = await stub.fetch(new Request('https://do/status'))
+  return c.json(await resp.json())
 })
 
 // DELETE /api/categorize — stop pipeline
 route.delete('/api/categorize', async (c) => {
-  const state = psm.getState()
-  if (state.status !== 'running') {
-    return c.json({ error: 'No pipeline running' }, 409)
-  }
-  psm.stop()
-  return c.json({ stopped: true })
+  const stub = getStub(c.env)
+  const resp = await stub.fetch(new Request('https://do/stop', { method: 'POST' }))
+  const data = await resp.json()
+  if (resp.status !== 200) return c.json(data, resp.status as 409)
+  return c.json(data)
 })
 
 // POST /api/categorize — start pipeline
 route.post('/api/categorize', async (c) => {
-  const state = psm.getState()
-  if (state.status === 'running' || state.status === 'stopping') {
-    return c.json({ error: 'Categorization is already running' }, 409)
-  }
-
   let body: { bookmarkIds?: string[]; apiKey?: string; force?: boolean } = {}
   try {
     const text = await c.req.text()
@@ -112,31 +102,57 @@ route.post('/api/categorize', async (c) => {
     .limit(1)
   const dbApiKey = dbApiKeyRows[0]?.value?.trim() || ''
 
-  // Mark pipeline as running
-  psm.start(total)
+  // Start via DO
+  const stub = getStub(c.env)
+  const startResp = await stub.fetch(new Request('https://do/start', {
+    method: 'POST',
+    body: JSON.stringify({ total }),
+    headers: { 'Content-Type': 'application/json' },
+  }))
+  if (startResp.status === 409) {
+    return c.json(await startResp.json(), 409)
+  }
 
   // Run pipeline in background via ctx.waitUntil
   c.executionCtx.waitUntil(
-    runPipeline({ bookmarkIds, force, dbApiKey, total, d1, bucket, env })
-      .then((wasStopped) => {
-        psm.finish({ wasStopped })
+    runPipeline({ bookmarkIds, force, dbApiKey, total, d1, bucket, env, stub })
+      .then(async (wasStopped) => {
+        await stub.fetch(new Request('https://do/finish', {
+          method: 'POST',
+          body: JSON.stringify({ wasStopped }),
+          headers: { 'Content-Type': 'application/json' },
+        }))
       })
-      .catch((err) => {
+      .catch(async (err) => {
         console.error('Pipeline error:', err)
-        psm.finish({
-          error: err instanceof Error ? err.message : String(err),
-        })
+        await stub.fetch(new Request('https://do/finish', {
+          method: 'POST',
+          body: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+          headers: { 'Content-Type': 'application/json' },
+        }))
       }),
   )
 
   return c.json({ status: 'started', total })
 })
 
-// ── Pipeline runner ──────────────────────────────────────────────────
+// ── DO helpers ──────────────────────────────────────────────────────
 
-function updateState(update: Partial<PipelineState>): void {
-  psm.setState(update)
+async function updateState(stub: DurableObjectStub, update: Partial<PipelineState>): Promise<void> {
+  await stub.fetch(new Request('https://do/update', {
+    method: 'POST',
+    body: JSON.stringify(update),
+    headers: { 'Content-Type': 'application/json' },
+  }))
 }
+
+async function shouldAbort(stub: DurableObjectStub): Promise<boolean> {
+  const resp = await stub.fetch(new Request('https://do/status'))
+  const state = (await resp.json()) as PipelineState
+  return state.status === 'stopping'
+}
+
+// ── Pipeline runner ──────────────────────────────────────────────────
 
 async function runPipeline(opts: {
   bookmarkIds: string[]
@@ -146,8 +162,9 @@ async function runPipeline(opts: {
   d1: D1Database
   bucket: R2Bucket
   env: Bindings
+  stub: DurableObjectStub
 }): Promise<boolean> {
-  const { bookmarkIds, force, dbApiKey, d1, bucket, env } = opts
+  const { bookmarkIds, force, dbApiKey, d1, bucket, env, stub } = opts
   const db = getDb(d1)
   const counts = { visionTagged: 0, entitiesExtracted: 0, enriched: 0, categorized: 0 }
 
@@ -172,20 +189,21 @@ async function runPipeline(opts: {
   }
 
   // Stage 1: Entity extraction (free, fast -- no API calls)
-  if (!psm.shouldAbort()) {
-    updateState({ stage: 'entities' })
+  if (!(await shouldAbort(stub))) {
+    await updateState(stub, { stage: 'entities' })
     counts.entitiesExtracted = await backfillEntities(db, (n) => {
       counts.entitiesExtracted = n
-      updateState({ stageCounts: { ...counts } })
-    }, () => psm.shouldAbort()).catch((err) => {
+      // Fire-and-forget update to avoid blocking the callback
+      updateState(stub, { stageCounts: { ...counts } }).catch(() => {})
+    }, () => shouldAbort(stub)).catch((err) => {
       console.error('Entity extraction error:', err)
       return counts.entitiesExtracted
     })
-    updateState({ stageCounts: { ...counts } })
+    await updateState(stub, { stageCounts: { ...counts } })
   }
 
   // Stage 2: Parallel pipeline -- vision + enrichment + categorize per bookmark
-  if (!psm.shouldAbort()) {
+  if (!(await shouldAbort(stub))) {
     let bookmarkIdsToProcess: string[]
     if (bookmarkIds.length > 0) {
       bookmarkIdsToProcess = bookmarkIds
@@ -205,7 +223,7 @@ async function runPipeline(opts: {
     }
 
     const runTotal = bookmarkIdsToProcess.length
-    updateState({ stage: 'parallel', done: 0, total: runTotal, stageCounts: { ...counts } })
+    await updateState(stub, { stage: 'parallel', done: 0, total: runTotal, stageCounts: { ...counts } })
 
     // Load category metadata once
     const dbCategories = await db
@@ -246,7 +264,7 @@ async function runPipeline(opts: {
             const results = await categorizeBatch(db, batch, client, categoryDescriptions, allSlugs)
             await writeCategoryResults(d1, db, results)
             counts.categorized += ids.length
-            updateState({ stageCounts: { ...counts } })
+            await updateState(stub, { stageCounts: { ...counts } })
           } catch (catErr) {
             console.error('[parallel] categorize batch error:', catErr)
           }
@@ -259,7 +277,7 @@ async function runPipeline(opts: {
     let processedCount = 0
 
     for (const bookmarkId of bookmarkIdsToProcess) {
-      if (psm.shouldAbort()) break
+      if (await shouldAbort(stub)) break
 
       const bm = await db.query.bookmarks.findFirst({
         where: eq(bookmarks.id, bookmarkId),
@@ -281,7 +299,7 @@ async function runPipeline(opts: {
       // Vision: analyze any untagged media items
       let anyVisionRan = false
       for (const media of bm.mediaItems) {
-        if (psm.shouldAbort()) break
+        if (await shouldAbort(stub)) break
         if (media.imageTags !== null) continue
         try {
           await analyzeItem(
@@ -293,7 +311,7 @@ async function runPipeline(opts: {
           )
           anyVisionRan = true
           counts.visionTagged++
-          updateState({ stageCounts: { ...counts } })
+          await updateState(stub, { stageCounts: { ...counts } })
         } catch (err) {
           console.warn('[parallel] vision failed for', media.id, err instanceof Error ? err.message : err)
         }
@@ -343,7 +361,7 @@ async function runPipeline(opts: {
                 })
                 .where(eq(bookmarks.id, bm.id))
               counts.enriched++
-              updateState({ stageCounts: { ...counts } })
+              await updateState(stub, { stageCounts: { ...counts } })
             }
           } catch (err) {
             console.warn('[parallel] enrichment failed for', bm.id, err instanceof Error ? err.message : err)
@@ -354,7 +372,7 @@ async function runPipeline(opts: {
       // Queue for categorization
       catPending.push(bm.id)
       processedCount++
-      updateState({ done: processedCount, stageCounts: { ...counts } })
+      await updateState(stub, { done: processedCount, stageCounts: { ...counts } })
       await drainCategorizeQueue()
     }
 
@@ -363,9 +381,9 @@ async function runPipeline(opts: {
   }
 
   // Stage 3: FTS rebuild
-  const wasStopped = psm.shouldAbort()
+  const wasStopped = await shouldAbort(stub)
   if (!wasStopped) {
-    updateState({ stage: 'fts' })
+    await updateState(stub, { stage: 'fts' })
     await rebuildFts(d1, db).catch((err) => console.error('FTS rebuild error:', err))
   }
 

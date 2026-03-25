@@ -1,9 +1,9 @@
 /**
  * PipelineDO — Durable Object for the AI categorization pipeline.
  *
- * This class is prepared for future deployment when OpenNext supports
- * exporting custom DOs from the main worker. Currently unused at runtime;
- * the app uses PipelineStateManager from pipeline-state.ts instead.
+ * Exported from the worker entry point and bound as PIPELINE_DO.
+ * The categorize route proxies all state management through this DO,
+ * which uses ctx.storage for persistent state across requests.
  */
 import { DurableObject } from 'cloudflare:workers'
 import type { PipelineState } from './pipeline-state'

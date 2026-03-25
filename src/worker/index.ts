@@ -55,5 +55,4 @@ app.get('*', async (c) => {
 })
 
 export default app
-// PipelineDO export will be enabled in Task H6
-// export { PipelineDO } from '../../lib/pipeline-do'
+export { PipelineDO } from '../../lib/pipeline-do'

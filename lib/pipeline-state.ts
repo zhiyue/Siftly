@@ -1,9 +1,9 @@
 /**
- * In-process pipeline state manager (globalThis fallback).
+ * Pipeline state types and globalThis fallback manager.
  *
- * Manages pipeline state on globalThis within the Worker isolate.
- * Used when the PIPELINE_DO binding is not available (current default).
- * For a single-user self-hosted app, this works within one isolate's lifetime.
+ * The PipelineState type and DEFAULT_STATE are imported by PipelineDO.
+ * The globalThis-based getPipelineStateManager is retained as a fallback
+ * but is no longer used in production (the DO handles all state).
  */
 
 export interface PipelineState {

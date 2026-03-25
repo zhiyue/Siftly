@@ -18,13 +18,12 @@
     "binding": "MEDIA_BUCKET",
     "bucket_name": "siftly-media"
   }],
-  // Durable Objects — uncomment in Task H6 when PipelineDO is exported from the worker
-  // "durable_objects": {
-  //   "bindings": [{ "name": "PIPELINE_DO", "class_name": "PipelineDO" }]
-  // },
-  // "migrations": [
-  //   { "tag": "v1", "new_classes": ["PipelineDO"] }
-  // ],
+  "durable_objects": {
+    "bindings": [{ "name": "PIPELINE_DO", "class_name": "PipelineDO" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_classes": ["PipelineDO"] }
+  ],
   "vars": {
     "ANTHROPIC_BASE_URL": "",
     "OPENAI_BASE_URL": ""
