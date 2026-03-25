@@ -8,6 +8,7 @@ import {
   Check,
   AlertCircle,
   Key,
+  KeyRound,
   Database,
   Info,
   Trash2,
@@ -19,6 +20,7 @@ import {
   Coffee,
   Terminal,
   Loader2,
+  Plus,
   X,
 } from 'lucide-react'
 
@@ -632,6 +634,199 @@ function ApiKeySection({ onToast }: { onToast: (t: Toast) => void }) {
   )
 }
 
+interface SiftlyApiKey {
+  id: string
+  name: string
+  prefix: string
+  lastUsedAt: string | null
+  createdAt: string
+}
+
+function SiftlyApiKeySection({ onToast }: { onToast: (t: Toast) => void }) {
+  const [keys, setKeys] = useState<SiftlyApiKey[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showNameInput, setShowNameInput] = useState(false)
+  const [newKeyName, setNewKeyName] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [newKeyValue, setNewKeyValue] = useState<string | null>(null)
+  const [copiedKey, setCopiedKey] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/settings/api-keys')
+      .then((r) => r.json())
+      .then((d: { keys: SiftlyApiKey[] }) => setKeys(d.keys))
+      .catch(() => onToast({ type: 'error', message: 'Failed to load API keys' }))
+      .finally(() => setLoading(false))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleGenerate() {
+    if (!newKeyName.trim()) {
+      onToast({ type: 'error', message: 'Please enter a name for the key' })
+      return
+    }
+    setGenerating(true)
+    try {
+      const res = await fetch('/api/settings/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newKeyName.trim() }),
+      })
+      if (!res.ok) {
+        const data = await res.json() as { error?: string }
+        throw new Error(data.error ?? 'Failed to generate key')
+      }
+      const data = await res.json() as { id: string; name: string; key: string; prefix: string; createdAt: string }
+      setNewKeyValue(data.key)
+      setKeys((prev) => [{ id: data.id, name: data.name, prefix: data.prefix, lastUsedAt: null, createdAt: data.createdAt }, ...prev])
+      setNewKeyName('')
+      setShowNameInput(false)
+    } catch (err) {
+      onToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to generate key' })
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/settings/api-keys/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json() as { error?: string }
+        throw new Error(data.error ?? 'Failed to delete key')
+      }
+      setKeys((prev) => prev.filter((k) => k.id !== id))
+      onToast({ type: 'success', message: 'API key deleted' })
+    } catch (err) {
+      onToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to delete key' })
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  function copyNewKey() {
+    if (!newKeyValue) return
+    void navigator.clipboard.writeText(newKeyValue).then(() => {
+      setCopiedKey(true)
+      setTimeout(() => setCopiedKey(false), 2000)
+    })
+  }
+
+  function formatDate(dateStr: string | null) {
+    if (!dateStr) return 'Never'
+    return new Date(dateStr).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
+  return (
+    <Section
+      icon={KeyRound}
+      title="API Keys"
+      description="Generate keys to access the Siftly API from external tools and scripts."
+    >
+      {/* New key revealed after generation */}
+      {newKeyValue && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-3 mb-4">
+          <p className="text-sm font-medium text-amber-300">Your new API key</p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 px-3 py-2 rounded-lg bg-zinc-900 border border-amber-500/20 text-amber-200 text-sm font-mono break-all select-all">
+              {newKeyValue}
+            </code>
+            <button
+              onClick={copyNewKey}
+              className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 hover:text-white transition-colors shrink-0"
+              title="Copy key"
+            >
+              {copiedKey ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+            </button>
+          </div>
+          <p className="text-xs text-amber-400/80">Copy this key now. It won&apos;t be shown again.</p>
+          <button
+            onClick={() => { setNewKeyValue(null); setCopiedKey(false) }}
+            className="px-4 py-2 rounded-xl bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-sm font-medium transition-colors"
+          >
+            I&apos;ve copied it
+          </button>
+        </div>
+      )}
+
+      {/* Key list */}
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-zinc-500 py-2">
+          <Loader2 size={14} className="animate-spin" /> Loading keys…
+        </div>
+      ) : keys.length === 0 ? (
+        <p className="text-sm text-zinc-500 py-2">No API keys yet. Generate one to get started.</p>
+      ) : (
+        <div className="space-y-2">
+          {keys.map((k) => (
+            <div
+              key={k.id}
+              className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-zinc-800/60 border border-zinc-700/50"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-zinc-200 truncate">{k.name}</p>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className="text-xs font-mono text-zinc-400">{k.prefix}••••••••</span>
+                  <span className="text-xs text-zinc-600">Created {formatDate(k.createdAt)}</span>
+                  <span className="text-xs text-zinc-600">Used: {formatDate(k.lastUsedAt)}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => void handleDelete(k.id)}
+                disabled={deletingId === k.id}
+                className="p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50 shrink-0"
+                title="Delete key"
+              >
+                {deletingId === k.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Generate button / name input */}
+      <div className="mt-4">
+        {showNameInput ? (
+          <div className="flex gap-2.5">
+            <input
+              type="text"
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && void handleGenerate()}
+              placeholder="Key name (e.g. 'CI pipeline')"
+              autoFocus
+              className="flex-1 px-3.5 py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-zinc-100 placeholder:text-zinc-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 transition-all duration-200"
+            />
+            <button
+              onClick={() => void handleGenerate()}
+              disabled={generating}
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors shrink-0 flex items-center gap-2"
+            >
+              {generating ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
+              {generating ? 'Generating…' : 'Generate'}
+            </button>
+            <button
+              onClick={() => { setShowNameInput(false); setNewKeyName('') }}
+              className="px-3 py-2.5 rounded-xl bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-sm font-medium transition-colors shrink-0"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowNameInput(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors"
+          >
+            <Plus size={14} />
+            Generate API Key
+          </button>
+        )}
+      </div>
+    </Section>
+  )
+}
+
 function ExportButton({
   label,
   href,
@@ -1010,6 +1205,7 @@ export default function SettingsPage() {
       <div className="space-y-4">
         <ApiKeySection onToast={showToast} />
         <XOAuthSection onToast={showToast} />
+        <SiftlyApiKeySection onToast={showToast} />
         <DataSection />
         <DangerZoneSection onToast={showToast} />
         <AboutSection />
