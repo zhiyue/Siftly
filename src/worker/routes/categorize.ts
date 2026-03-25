@@ -184,8 +184,7 @@ async function runPipeline(opts: {
       .where(eq(mediaItems.imageTags, '{}'))
     await db
       .update(bookmarks)
-      .set({ semanticTags: null })
-      .where(eq(bookmarks.semanticTags, '[]'))
+      .set({ semanticTags: null, enrichmentMeta: null, enrichedAt: null })
   }
 
   // Stage 1: Entity extraction (free, fast -- no API calls)

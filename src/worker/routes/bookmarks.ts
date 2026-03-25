@@ -123,6 +123,10 @@ route.get('/api/bookmarks', async (c) => {
       authorHandle: bookmark.authorHandle,
       authorName: bookmark.authorName,
       source: bookmark.source,
+      semanticTags: bookmark.semanticTags,
+      entities: bookmark.entities,
+      enrichedAt: bookmark.enrichedAt,
+      enrichmentMeta: bookmark.enrichmentMeta,
       tweetCreatedAt: bookmark.tweetCreatedAt ?? null,
       importedAt: bookmark.importedAt,
       mediaItems: bookmark.mediaItems.map((m) => ({
