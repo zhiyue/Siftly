@@ -934,25 +934,51 @@ function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void 
     }
   }
 
+  const [syncProgress, setSyncProgress] = useState<{
+    page: number; imported: number; skipped: number
+  } | null>(null)
+
   async function handleSync() {
     setError('')
     setSuccess('')
     setSyncing(true)
+    setSyncProgress(null)
     try {
       const res = await fetch('/api/import/live/sync', { method: 'POST' })
-      const data = await res.json() as { error?: string; imported?: number; skipped?: number; total?: number }
+      const data = await res.json() as { error?: string; status?: string }
       if (!res.ok) throw new Error(data.error ?? 'Sync failed')
-      setLastSync(new Date().toISOString())
-      setSuccess(`Synced: ${data.imported ?? 0} imported, ${data.skipped ?? 0} skipped`)
-      onSynced({
-        imported: data.imported ?? 0,
-        skipped: data.skipped ?? 0,
-        total: data.total ?? 0,
-        parsed: data.total ?? 0,
-      })
+
+      // Poll for progress
+      const poll = setInterval(async () => {
+        try {
+          const r = await fetch('/api/import/live/sync')
+          const p = await r.json() as { status: string; page: number; imported: number; skipped: number; error?: string }
+          setSyncProgress({ page: p.page, imported: p.imported, skipped: p.skipped })
+
+          if (p.status === 'done') {
+            clearInterval(poll)
+            setSyncing(false)
+            setLastSync(new Date().toISOString())
+            setSuccess(`Synced: ${p.imported} imported, ${p.skipped} skipped`)
+            setSyncProgress(null)
+            onSynced({
+              imported: p.imported,
+              skipped: p.skipped,
+              total: p.imported + p.skipped,
+              parsed: p.imported + p.skipped,
+            })
+          } else if (p.status === 'error') {
+            clearInterval(poll)
+            setSyncing(false)
+            setSyncProgress(null)
+            setError(p.error ?? 'Sync failed')
+          }
+        } catch {
+          // ignore poll errors
+        }
+      }, 1000)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sync failed')
-    } finally {
       setSyncing(false)
     }
   }
@@ -1016,6 +1042,20 @@ function CookieSyncTab({ onSynced }: { onSynced: (result: ImportResult) => void 
                 <Trash2 size={14} />
               </button>
             </div>
+
+            {/* Sync progress */}
+            {syncing && syncProgress && (
+              <div className="bg-zinc-900/80 rounded-xl p-3 border border-indigo-500/20">
+                <div className="flex items-center gap-2 text-sm text-indigo-300 mb-1">
+                  <Loader2 size={13} className="animate-spin" />
+                  <span>Syncing page {syncProgress.page}...</span>
+                </div>
+                <div className="text-xs text-zinc-400 space-x-3">
+                  <span className="text-emerald-400">{syncProgress.imported} imported</span>
+                  <span className="text-zinc-500">{syncProgress.skipped} skipped</span>
+                </div>
+              </div>
+            )}
 
             {/* Sync interval */}
             <div>

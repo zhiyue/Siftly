@@ -3,7 +3,7 @@ import type { Bindings } from '../index'
 import { getDb } from '@/lib/db'
 import { eq } from 'drizzle-orm'
 import { settings } from '@/lib/schema'
-import { startScheduler, stopScheduler, isSchedulerRunning, syncBookmarks, isSyncing } from '@/lib/x-sync'
+import { startScheduler, stopScheduler, isSchedulerRunning, syncBookmarks, isSyncing, getSyncProgress } from '@/lib/x-sync'
 
 const route = new Hono<{ Bindings: Bindings }>()
 
@@ -114,7 +114,12 @@ route.delete('/api/import/live', async (c) => {
   }
 })
 
-// POST /api/import/live/sync — trigger a manual sync
+// GET /api/import/live/sync — check sync progress
+route.get('/api/import/live/sync', async (c) => {
+  return c.json(getSyncProgress())
+})
+
+// POST /api/import/live/sync — trigger a manual sync (runs in background)
 route.post('/api/import/live/sync', async (c) => {
   if (isSyncing()) {
     return c.json({ error: 'A sync is already in progress' }, 409)
@@ -134,8 +139,14 @@ route.post('/api/import/live/sync', async (c) => {
       )
     }
 
-    const result = await syncBookmarks(db, authRows[0].value, ct0Rows[0].value)
-    return c.json(result)
+    // Run sync in background
+    c.executionCtx.waitUntil(
+      syncBookmarks(db, authRows[0].value, ct0Rows[0].value).catch((err) => {
+        console.error('[x-sync] Background sync failed:', err instanceof Error ? err.message : err)
+      })
+    )
+
+    return c.json({ status: 'started' })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Sync failed'
     const status = msg.includes('already in progress') ? 409 : 500

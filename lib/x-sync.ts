@@ -5,6 +5,25 @@ import type { AppDb } from '@/lib/db'
 
 // ── Sync ────────────────────────────────────────────────────────────────────────
 
+export interface SyncProgress {
+  status: 'idle' | 'syncing' | 'done' | 'error'
+  page: number
+  imported: number
+  skipped: number
+  error?: string
+}
+
+const _syncProgress: SyncProgress = {
+  status: 'idle',
+  page: 0,
+  imported: 0,
+  skipped: 0,
+}
+
+export function getSyncProgress(): SyncProgress {
+  return { ..._syncProgress }
+}
+
 export async function syncBookmarks(
   db: AppDb,
   authToken: string,
@@ -12,6 +31,11 @@ export async function syncBookmarks(
 ): Promise<{ imported: number; skipped: number }> {
   if (syncing) throw new Error('A sync is already in progress')
   syncing = true
+  _syncProgress.status = 'syncing'
+  _syncProgress.page = 0
+  _syncProgress.imported = 0
+  _syncProgress.skipped = 0
+  _syncProgress.error = undefined
 
   try {
     let imported = 0
@@ -20,8 +44,13 @@ export async function syncBookmarks(
     const MAX_PAGES = 50
 
     for (let page = 0; page < MAX_PAGES; page++) {
+      _syncProgress.page = page + 1
+      console.log(`[x-sync] Fetching page ${page + 1}...`)
+
       const data = await fetchPage(authToken, ct0, cursor)
       const { tweets, nextCursor } = parsePage(data)
+
+      console.log(`[x-sync] Page ${page + 1}: ${tweets.length} tweets, nextCursor=${!!nextCursor}`)
 
       // On the first page, verify the API response structure hasn't changed
       if (page === 0 && tweets.length === 0 && !nextCursor) {
@@ -35,8 +64,15 @@ export async function syncBookmarks(
       const result = await importTweets(db, tweets)
       imported += result.imported
       skipped += result.skipped
+      _syncProgress.imported = imported
+      _syncProgress.skipped = skipped
 
-      if (!nextCursor || tweets.length === 0) break
+      console.log(`[x-sync] Page ${page + 1} done: +${result.imported} imported, +${result.skipped} skipped (total: ${imported}/${skipped})`)
+
+      if (!nextCursor || tweets.length === 0) {
+        console.log(`[x-sync] Pagination ended: nextCursor=${!!nextCursor}, tweets=${tweets.length}`)
+        break
+      }
       cursor = nextCursor
 
       if (page === MAX_PAGES - 1) {
@@ -53,7 +89,14 @@ export async function syncBookmarks(
         .onConflictDoUpdate({ target: settings.key, set: { value: now } })
     }
 
+    _syncProgress.status = 'done'
+    console.log(`[x-sync] Sync complete: ${imported} imported, ${skipped} skipped`)
     return { imported, skipped }
+  } catch (err) {
+    _syncProgress.status = 'error'
+    _syncProgress.error = err instanceof Error ? err.message : String(err)
+    console.error(`[x-sync] Sync error:`, _syncProgress.error)
+    throw err
   } finally {
     syncing = false
   }
