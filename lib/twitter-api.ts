@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
-import { getDb } from '@/lib/db'
 import { bookmarks, mediaItems } from '@/lib/schema'
+import type { AppDb } from '@/lib/db'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -237,9 +237,9 @@ export function tweetFullText(tweet: TweetResult): string {
 // ── Import tweets to DB ───────────────────────────────────────────────────────
 
 export async function importTweets(
+  db: AppDb,
   tweets: TweetResult[],
 ): Promise<{ imported: number; skipped: number }> {
-  const db = getDb()
   let imported = 0
   let skipped = 0
 

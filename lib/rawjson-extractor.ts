@@ -3,8 +3,8 @@
  * No AI calls — pure data mining from already-stored JSON.
  */
 import { eq, isNull } from 'drizzle-orm'
-import { getDb } from '@/lib/db'
 import { bookmarks } from '@/lib/schema'
+import type { AppDb } from '@/lib/db'
 
 export interface ExtractedEntities {
   hashtags: string[]
@@ -256,10 +256,10 @@ export function extractEntities(rawJson: string): ExtractedEntities {
  * Returns count of updated bookmarks.
  */
 export async function backfillEntities(
+  db: AppDb,
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
-  const db = getDb()
   const CHUNK = 100
   let total = 0
 

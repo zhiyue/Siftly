@@ -1,19 +1,19 @@
 import OpenAI from 'openai'
-import { getCloudflareContext } from '@opennextjs/cloudflare'
 
 /**
  * Resolves an OpenAI client. Auth chain:
  * 1. Override key (from request)
  * 2. DB-saved key
- * 3. OPENAI_API_KEY Workers Secret
+ * 3. OPENAI_API_KEY Workers Secret (passed via envApiKey)
  */
 export function resolveOpenAIClient(options: {
   overrideKey?: string
   dbKey?: string
   baseURL?: string
+  envApiKey?: string    // OPENAI_API_KEY from c.env
+  envBaseURL?: string   // OPENAI_BASE_URL from c.env
 } = {}): OpenAI {
-  const { env } = getCloudflareContext()
-  const baseURL = options.baseURL || env.OPENAI_BASE_URL || undefined
+  const baseURL = options.baseURL || options.envBaseURL || undefined
 
   if (options.overrideKey?.trim()) {
     return new OpenAI({ apiKey: options.overrideKey.trim(), ...(baseURL ? { baseURL } : {}) })
@@ -23,7 +23,7 @@ export function resolveOpenAIClient(options: {
     return new OpenAI({ apiKey: options.dbKey.trim(), ...(baseURL ? { baseURL } : {}) })
   }
 
-  const envKey = env.OPENAI_API_KEY?.trim()
+  const envKey = options.envApiKey?.trim()
   if (envKey) {
     return new OpenAI({ apiKey: envKey, ...(baseURL ? { baseURL } : {}) })
   }

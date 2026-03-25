@@ -1,10 +1,10 @@
 import { eq, and, isNull, not, gt, inArray, asc } from 'drizzle-orm'
-import { getDb } from '@/lib/db'
 import { bookmarks, mediaItems } from '@/lib/schema'
 import { buildImageContext } from '@/lib/image-context'
 import { getActiveModel } from '@/lib/settings'
 import { AIClient } from '@/lib/ai-client'
 import { uploadMedia, getMedia, mediaKey } from '@/lib/r2'
+import type { AppDb } from '@/lib/db'
 
 export { getActiveModel } from '@/lib/settings'
 
@@ -41,6 +41,8 @@ function filenameFromUrl(url: string): string {
 }
 
 async function fetchImageAsBase64(
+  db: AppDb,
+  bucket: R2Bucket,
   url: string,
   r2Info?: { bookmarkId: string; mediaItemId: string },
 ): Promise<{ data: string; mediaType: AllowedMediaType } | null> {
@@ -48,7 +50,7 @@ async function fetchImageAsBase64(
   if (r2Info) {
     try {
       const key = mediaKey(r2Info.bookmarkId, filenameFromUrl(url))
-      const r2Obj = await getMedia(key)
+      const r2Obj = await getMedia(bucket, key)
       if (r2Obj) {
         const buffer = await r2Obj.arrayBuffer()
         const ct = r2Obj.httpMetadata?.contentType ?? null
@@ -81,9 +83,8 @@ async function fetchImageAsBase64(
     // 3. Upload to R2 in the background for future use
     if (r2Info) {
       const key = mediaKey(r2Info.bookmarkId, filenameFromUrl(url))
-      const db = getDb()
       // Fire-and-forget: don't block vision analysis on R2 upload
-      uploadMedia(key, buffer, mediaType)
+      uploadMedia(bucket, key, buffer, mediaType)
         .then(() =>
           db
             .update(mediaItems)
@@ -126,13 +127,15 @@ const RETRY_DELAYS_MS = [1500, 4000, 10000]
 const CONCURRENCY = 12
 
 async function analyzeImageWithRetry(
+  db: AppDb,
+  bucket: R2Bucket,
   url: string,
   client: AIClient,
   model: string,
   r2Info?: { bookmarkId: string; mediaItemId: string },
   attempt = 0,
 ): Promise<string> {
-  const img = await fetchImageAsBase64(url, r2Info)
+  const img = await fetchImageAsBase64(db, bucket, url, r2Info)
   if (!img) return ''
 
   try {
@@ -181,7 +184,7 @@ async function analyzeImageWithRetry(
 
     if (isRetryable && attempt < RETRY_DELAYS_MS.length) {
       await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]))
-      return analyzeImageWithRetry(url, client, model, r2Info, attempt + 1)
+      return analyzeImageWithRetry(db, bucket, url, client, model, r2Info, attempt + 1)
     }
     return ''
   }
@@ -199,8 +202,7 @@ export interface MediaItemForAnalysis {
  * Check if this URL's analysis result is already cached in another MediaItem row.
  * Deduplicates API calls for the same image URL.
  */
-async function getCachedAnalysis(imageUrl: string, excludeId: string): Promise<string | null> {
-  const db = getDb()
+async function getCachedAnalysis(db: AppDb, imageUrl: string, excludeId: string): Promise<string | null> {
   const rows = await db
     .select({ imageTags: mediaItems.imageTags })
     .from(mediaItems)
@@ -216,15 +218,16 @@ async function getCachedAnalysis(imageUrl: string, excludeId: string): Promise<s
 }
 
 export async function analyzeItem(
+  db: AppDb,
+  bucket: R2Bucket,
   item: MediaItemForAnalysis,
   client: AIClient,
   model: string,
 ): Promise<number> {
-  const db = getDb()
   const imageUrl = item.type === 'video' ? (item.thumbnailUrl ?? item.url) : item.url
 
   // Check URL-level dedup cache first
-  const cached = await getCachedAnalysis(imageUrl, item.id)
+  const cached = await getCachedAnalysis(db, imageUrl, item.id)
   if (cached) {
     await db.update(mediaItems).set({ imageTags: cached }).where(eq(mediaItems.id, item.id))
     return 1
@@ -232,7 +235,7 @@ export async function analyzeItem(
 
   const prefix = item.type === 'video' ? '{"_type":"video_thumbnail",' : ''
   const r2Info = { bookmarkId: item.bookmarkId, mediaItemId: item.id }
-  let tags = await analyzeImageWithRetry(imageUrl, client, model, r2Info)
+  let tags = await analyzeImageWithRetry(db, bucket, imageUrl, client, model, r2Info)
 
   if (tags && prefix) {
     // Inject a _type marker into the JSON for video thumbnails
@@ -270,6 +273,8 @@ export async function runWithConcurrency<T>(
 }
 
 export async function analyzeBatch(
+  db: AppDb,
+  bucket: R2Bucket,
   items: MediaItemForAnalysis[],
   client: AIClient,
   onProgress?: (delta: number) => void,
@@ -278,11 +283,11 @@ export async function analyzeBatch(
   const analyzable = items.filter((m) => m.type === 'photo' || m.type === 'gif' || m.type === 'video')
   if (analyzable.length === 0) return 0
 
-  const model = await getActiveModel()
+  const model = await getActiveModel(db)
 
   const tasks = analyzable.map((item) => async () => {
     if (shouldAbort?.()) return 0
-    const result = await analyzeItem(item, client, model)
+    const result = await analyzeItem(db, bucket, item, client, model)
     onProgress?.(1)
     return result
   })
@@ -291,8 +296,7 @@ export async function analyzeBatch(
   return results.reduce((sum, r) => sum + r, 0)
 }
 
-export async function analyzeUntaggedImages(client: AIClient, limit = 10): Promise<number> {
-  const db = getDb()
+export async function analyzeUntaggedImages(db: AppDb, bucket: R2Bucket, client: AIClient, limit = 10): Promise<number> {
   const untagged = await db
     .select({
       id: mediaItems.id,
@@ -310,18 +314,19 @@ export async function analyzeUntaggedImages(client: AIClient, limit = 10): Promi
     )
     .limit(limit)
   if (untagged.length === 0) return 0
-  return analyzeBatch(untagged, client)
+  return analyzeBatch(db, bucket, untagged, client)
 }
 
 /**
  * Analyze ALL untagged media items (no limit). Used during full AI categorization.
  */
 export async function analyzeAllUntagged(
+  db: AppDb,
+  bucket: R2Bucket,
   client: AIClient,
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
-  const db = getDb()
   const CHUNK = 15
   let total = 0
   let cursor: string | undefined
@@ -352,7 +357,7 @@ export async function analyzeAllUntagged(
 
     cursor = untagged[untagged.length - 1].id
 
-    await analyzeBatch(untagged, client, (delta) => {
+    await analyzeBatch(db, bucket, untagged, client, (delta) => {
       total += delta
       onProgress?.(total)
     }, shouldAbort)
@@ -422,6 +427,7 @@ ${JSON.stringify(items, null, 1)}`
 }
 
 export async function enrichBatchSemanticTags(
+  db: AppDb,
   bmarks: BookmarkForEnrichment[],
   client: AIClient | null,
 ): Promise<EnrichmentResult[]> {
@@ -449,7 +455,7 @@ export async function enrichBatchSemanticTags(
     return []
   }
 
-  const model = await getActiveModel()
+  const model = await getActiveModel(db)
   const ENRICH_RETRY_DELAYS = [2000, 5000]
 
   for (let attempt = 0; attempt <= ENRICH_RETRY_DELAYS.length; attempt++) {
@@ -479,11 +485,11 @@ export async function enrichBatchSemanticTags(
  * with ENRICH_CONCURRENCY parallel batches — 5-10x fewer API calls vs. per-bookmark.
  */
 export async function enrichAllBookmarks(
+  db: AppDb,
   client: AIClient,
   onProgress?: (total: number) => void,
   shouldAbort?: () => boolean,
 ): Promise<number> {
-  const db = getDb()
   const CHUNK = ENRICH_BATCH_SIZE * ENRICH_CONCURRENCY * 2 // fetch ahead of processing
   let enriched = 0
   let cursor: string | undefined
@@ -550,7 +556,7 @@ export async function enrichAllBookmarks(
     const batchTasks = batches.map((batch) => async () => {
       if (shouldAbort?.()) return
 
-      const results = await enrichBatchSemanticTags(batch, client)
+      const results = await enrichBatchSemanticTags(db, batch, client)
       const resultMap = new Map(results.map((r) => [r.id, r]))
 
       for (const b of batch) {
@@ -588,14 +594,15 @@ export async function enrichAllBookmarks(
  * For bulk processing use enrichAllBookmarks instead.
  */
 export async function enrichBookmarkSemanticTags(
+  db: AppDb,
   bookmarkId: string,
   tweetText: string,
   imageTags: string[],
   client: AIClient,
   entities?: BookmarkForEnrichment['entities'],
 ): Promise<string[]> {
-  const db = getDb()
   const results = await enrichBatchSemanticTags(
+    db,
     [{ id: bookmarkId, text: tweetText, imageTags, entities }],
     client,
   )

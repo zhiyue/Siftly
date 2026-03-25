@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
-import { getDb } from '@/lib/db'
 import { settings } from '@/lib/schema'
+import type { AppDb } from '@/lib/db'
 
 // Module-level caches — avoids hundreds of DB roundtrips per pipeline run
 let _cachedModel: string | null = null
@@ -17,25 +17,24 @@ const CACHE_TTL = 5 * 60 * 1000
 /**
  * Get the configured Anthropic model from settings (cached for 5 minutes).
  */
-export async function getAnthropicModel(): Promise<string> {
+export async function getAnthropicModel(db: AppDb): Promise<string> {
   if (_cachedModel && Date.now() < _modelCacheExpiry) return _cachedModel
-  const db = getDb()
   const rows = await db
     .select()
     .from(settings)
     .where(eq(settings.key, 'anthropicModel'))
     .limit(1)
-  _cachedModel = rows[0]?.value ?? 'claude-haiku-4-5-20251001'
+  const model = rows[0]?.value ?? 'claude-haiku-4-5-20251001'
+  _cachedModel = model
   _modelCacheExpiry = Date.now() + CACHE_TTL
-  return _cachedModel
+  return model
 }
 
 /**
  * Get the active AI provider (cached for 5 minutes).
  */
-export async function getProvider(): Promise<'anthropic' | 'openai'> {
+export async function getProvider(db: AppDb): Promise<'anthropic' | 'openai'> {
   if (_cachedProvider && Date.now() < _providerCacheExpiry) return _cachedProvider
-  const db = getDb()
   const rows = await db
     .select()
     .from(settings)
@@ -49,25 +48,25 @@ export async function getProvider(): Promise<'anthropic' | 'openai'> {
 /**
  * Get the configured OpenAI model from settings (cached for 5 minutes).
  */
-export async function getOpenAIModel(): Promise<string> {
+export async function getOpenAIModel(db: AppDb): Promise<string> {
   if (_cachedOpenAIModel && Date.now() < _openAIModelCacheExpiry) return _cachedOpenAIModel
-  const db = getDb()
   const rows = await db
     .select()
     .from(settings)
     .where(eq(settings.key, 'openaiModel'))
     .limit(1)
-  _cachedOpenAIModel = rows[0]?.value ?? 'gpt-4.1-mini'
+  const model = rows[0]?.value ?? 'gpt-4.1-mini'
+  _cachedOpenAIModel = model
   _openAIModelCacheExpiry = Date.now() + CACHE_TTL
-  return _cachedOpenAIModel
+  return model
 }
 
 /**
  * Get the model for the currently active provider.
  */
-export async function getActiveModel(): Promise<string> {
-  const provider = await getProvider()
-  return provider === 'openai' ? getOpenAIModel() : getAnthropicModel()
+export async function getActiveModel(db: AppDb): Promise<string> {
+  const provider = await getProvider(db)
+  return provider === 'openai' ? getOpenAIModel(db) : getAnthropicModel(db)
 }
 
 /**

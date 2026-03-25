@@ -1,7 +1,7 @@
 import JSZip from 'jszip'
 import { eq, desc, inArray } from 'drizzle-orm'
-import { getDb } from '@/lib/db'
 import { bookmarks, categories, bookmarkCategories, mediaItems } from '@/lib/schema'
+import type { AppDb } from '@/lib/db'
 
 interface BookmarkRow {
   id: string
@@ -32,8 +32,7 @@ interface CategoryJoin {
   }
 }
 
-async function fetchBookmarksFull(bookmarkIds?: string[]): Promise<BookmarkRow[]> {
-  const db = getDb()
+async function fetchBookmarksFull(db: AppDb, bookmarkIds?: string[]): Promise<BookmarkRow[]> {
   const rows = await db.query.bookmarks.findMany({
     where: bookmarkIds && bookmarkIds.length > 0
       ? inArray(bookmarks.id, bookmarkIds)
@@ -73,9 +72,7 @@ async function fetchBookmarksFull(bookmarkIds?: string[]): Promise<BookmarkRow[]
   }))
 }
 
-async function fetchBookmarksForCategory(categorySlug: string): Promise<BookmarkRow[]> {
-  const db = getDb()
-
+async function fetchBookmarksForCategory(db: AppDb, categorySlug: string): Promise<BookmarkRow[]> {
   // First, get the bookmark IDs in this category
   const bcRows = await db
     .select({ bookmarkId: bookmarkCategories.bookmarkId })
@@ -86,7 +83,7 @@ async function fetchBookmarksForCategory(categorySlug: string): Promise<Bookmark
   const ids = bcRows.map((r) => r.bookmarkId)
   if (ids.length === 0) return []
 
-  return fetchBookmarksFull(ids)
+  return fetchBookmarksFull(db, ids)
 }
 
 function formatCsvField(value: string): string {
@@ -132,8 +129,7 @@ function mediaExtension(type: string, url: string): string {
   return '.jpg'
 }
 
-export async function exportCategoryAsZip(categorySlug: string): Promise<Uint8Array> {
-  const db = getDb()
+export async function exportCategoryAsZip(db: AppDb, categorySlug: string): Promise<Uint8Array> {
   const categoryRow = await db
     .select()
     .from(categories)
@@ -144,7 +140,7 @@ export async function exportCategoryAsZip(categorySlug: string): Promise<Uint8Ar
     throw new Error(`Category not found: ${categorySlug}`)
   }
 
-  const bookmarkRows = await fetchBookmarksForCategory(categorySlug)
+  const bookmarkRows = await fetchBookmarksForCategory(db, categorySlug)
 
   const zip = new JSZip()
   const mediaFolder = zip.folder('media')
@@ -188,8 +184,8 @@ export async function exportCategoryAsZip(categorySlug: string): Promise<Uint8Ar
   return buffer
 }
 
-export async function exportAllBookmarksCsv(): Promise<string> {
-  const bookmarkRows = await fetchBookmarksFull()
+export async function exportAllBookmarksCsv(db: AppDb): Promise<string> {
+  const bookmarkRows = await fetchBookmarksFull(db)
 
   const headers = buildCsvRow([
     'tweetId',
@@ -220,8 +216,8 @@ export async function exportAllBookmarksCsv(): Promise<string> {
   return [headers, ...rows].join('\n')
 }
 
-export async function exportBookmarksJson(bookmarkIds?: string[]): Promise<string> {
-  const bookmarkRows = await fetchBookmarksFull(bookmarkIds)
+export async function exportBookmarksJson(db: AppDb, bookmarkIds?: string[]): Promise<string> {
+  const bookmarkRows = await fetchBookmarksFull(db, bookmarkIds)
 
   const output = bookmarkRows.map((bookmark) => ({
     tweetId: bookmark.tweetId,

@@ -8,14 +8,13 @@
  */
 
 import { gt, asc } from 'drizzle-orm'
-import { getD1, getDb } from '@/lib/db'
 import { bookmarks } from '@/lib/schema'
+import type { AppDb } from '@/lib/db'
 
 const FTS_TABLE = 'bookmark_fts'
 
-export async function ensureFtsTable(): Promise<void> {
-  const db = getD1()
-  await db.prepare(`
+export async function ensureFtsTable(d1: D1Database): Promise<void> {
+  await d1.prepare(`
     CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(
       bookmark_id UNINDEXED,
       text,
@@ -32,10 +31,8 @@ export async function ensureFtsTable(): Promise<void> {
  * and D1 batch() to stay within D1's ~100 statement batch limit.
  * Call after import or enrichment runs.
  */
-export async function rebuildFts(): Promise<void> {
-  const d1 = getD1()
-  const db = getDb()
-  await ensureFtsTable()
+export async function rebuildFts(d1: D1Database, db: AppDb): Promise<void> {
+  await ensureFtsTable(d1)
   await d1.prepare(`DELETE FROM ${FTS_TABLE}`).run()
 
   // D1 batch() limit is ~100 statements per call
@@ -78,12 +75,11 @@ export async function rebuildFts(): Promise<void> {
  * Returns bookmark IDs ordered by relevance rank.
  * Returns [] on error (caller should fall back to LIKE queries).
  */
-export async function ftsSearch(keywords: string[]): Promise<string[]> {
+export async function ftsSearch(d1: D1Database, keywords: string[]): Promise<string[]> {
   if (keywords.length === 0) return []
 
   try {
-    const db = getD1()
-    await ensureFtsTable()
+    await ensureFtsTable(d1)
 
     const terms = keywords
       .map((kw) => kw.replace(/["*()]/g, ' ').trim())
@@ -93,7 +89,7 @@ export async function ftsSearch(keywords: string[]): Promise<string[]> {
 
     const matchQuery = terms.join(' OR ')
 
-    const { results } = await db.prepare(
+    const { results } = await d1.prepare(
       `SELECT bookmark_id FROM ${FTS_TABLE} WHERE ${FTS_TABLE} MATCH ? ORDER BY rank LIMIT 150`
     ).bind(matchQuery).all<{ bookmark_id: string }>()
 

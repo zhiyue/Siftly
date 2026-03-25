@@ -1,10 +1,10 @@
 import { eq, and, gt, isNull, inArray, count as countFn, asc } from 'drizzle-orm'
-import { getD1, getDb } from '@/lib/db'
 import { bookmarks, categories, bookmarkCategories, mediaItems } from '@/lib/schema'
 import { buildImageContext } from '@/lib/image-context'
 import { getActiveModel, getProvider } from '@/lib/settings'
 import { AIClient, resolveAIClient } from '@/lib/ai-client'
 import { settings } from '@/lib/schema'
+import type { AppDb } from '@/lib/db'
 
 const BATCH_SIZE = 20
 
@@ -136,8 +136,7 @@ interface CategorizationResult {
   assignments: CategoryAssignment[]
 }
 
-export async function seedDefaultCategories(): Promise<void> {
-  const db = getDb()
+export async function seedDefaultCategories(db: AppDb): Promise<void> {
   const existing = await db
     .select({ slug: categories.slug })
     .from(categories)
@@ -235,6 +234,7 @@ function parseCategorizationResponse(text: string, validSlugs: Set<string>): Cat
 }
 
 export async function categorizeBatch(
+  db: AppDb,
   bmarks: BookmarkForCategorization[],
   client: AIClient | null,
   categoryDescriptions: Record<string, string> = {},
@@ -248,7 +248,7 @@ export async function categorizeBatch(
     throw new Error('No API key configured. Add your key in Settings.')
   }
 
-  const model = await getActiveModel()
+  const model = await getActiveModel(db)
   const response = await client.createMessage({
     model,
     max_tokens: 2048,
@@ -260,13 +260,11 @@ export async function categorizeBatch(
   return parseCategorizationResponse(response.text, new Set(allSlugs))
 }
 
-export async function writeCategoryResults(results: CategorizationResult[]): Promise<void> {
+export async function writeCategoryResults(d1: D1Database, db: AppDb, results: CategorizationResult[]): Promise<void> {
   if (results.length === 0) return
 
   const tweetIds = results.map((r) => r.tweetId).filter(Boolean)
   if (tweetIds.length === 0) return
-
-  const db = getDb()
 
   // Batch-fetch all categories and bookmarks at once (eliminates N+1 queries)
   const [allCategories, allBookmarks] = await Promise.all([
@@ -282,7 +280,6 @@ export async function writeCategoryResults(results: CategorizationResult[]): Pro
   const now = new Date().toISOString()
 
   // Build D1 batch statements instead of Drizzle $transaction
-  const d1 = getD1()
   const stmts: D1PreparedStatement[] = []
   const bookmarkIdsToUpdate: string[] = []
 
@@ -368,24 +365,30 @@ export const BOOKMARK_SELECT = {
 } as const
 
 export async function categorizeAll(
+  d1: D1Database,
+  db: AppDb,
+  env: {
+    ANTHROPIC_API_KEY?: string
+    OPENAI_API_KEY?: string
+    ANTHROPIC_BASE_URL?: string
+    OPENAI_BASE_URL?: string
+  },
   bookmarkIds: string[],
   onProgress?: (done: number, total: number) => void,
   force = false,
   shouldAbort?: () => boolean,
 ): Promise<void> {
-  await seedDefaultCategories()
-
-  const db = getDb()
+  await seedDefaultCategories(db)
 
   // Resolve auth once — avoids re-resolving inside every batch call
-  const provider = await getProvider()
+  const provider = await getProvider(db)
   const keyName = provider === 'openai' ? 'openaiApiKey' : 'anthropicApiKey'
   const apiKeyRows = await db
     .select()
     .from(settings)
     .where(eq(settings.key, keyName))
     .limit(1)
-  const client = await resolveAIClient({ dbKey: apiKeyRows[0]?.value })
+  const client = await resolveAIClient({ db, dbKey: apiKeyRows[0]?.value, env })
 
   // Load ALL categories (default + custom) for the prompt
   const dbCategories = await db
@@ -425,8 +428,8 @@ export async function categorizeAll(
       })
       const batch = rows.map(mapBookmarkForCategorization)
       try {
-        const results = await categorizeBatch(batch, client, categoryDescriptions, allSlugs)
-        await writeCategoryResults(results)
+        const results = await categorizeBatch(db, batch, client, categoryDescriptions, allSlugs)
+        await writeCategoryResults(d1, db, results)
       } catch (err) {
         console.error(`Error categorizing batch at index ${i}:`, err)
       }
@@ -459,8 +462,8 @@ export async function categorizeAll(
 
       const batch = rows.map(mapBookmarkForCategorization)
       try {
-        const results = await categorizeBatch(batch, client, categoryDescriptions, allSlugs)
-        await writeCategoryResults(results)
+        const results = await categorizeBatch(db, batch, client, categoryDescriptions, allSlugs)
+        await writeCategoryResults(d1, db, results)
       } catch (err) {
         console.error('Error categorizing batch:', err)
       }

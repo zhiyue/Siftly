@@ -1,11 +1,12 @@
 import { eq } from 'drizzle-orm'
-import { getDb } from '@/lib/db'
 import { settings } from '@/lib/schema'
 import { fetchPage, parsePage, importTweets } from '@/lib/twitter-api'
+import type { AppDb } from '@/lib/db'
 
 // ── Sync ────────────────────────────────────────────────────────────────────────
 
 export async function syncBookmarks(
+  db: AppDb,
   authToken: string,
   ct0: string,
 ): Promise<{ imported: number; skipped: number }> {
@@ -31,7 +32,7 @@ export async function syncBookmarks(
         }
       }
 
-      const result = await importTweets(tweets)
+      const result = await importTweets(db, tweets)
       imported += result.imported
       skipped += result.skipped
 
@@ -45,7 +46,6 @@ export async function syncBookmarks(
 
     // Only update last sync timestamp if we actually fetched tweets
     if (imported > 0 || skipped > 0) {
-      const db = getDb()
       const now = new Date().toISOString()
       await db
         .insert(settings)
@@ -73,10 +73,13 @@ const INTERVAL_MS: Record<SyncInterval, number> = {
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
 let syncing = false
 
-export async function startScheduler() {
-  stopScheduler()
+// Store the db reference for the scheduler to use
+let _schedulerDb: AppDb | null = null
 
-  const db = getDb()
+export async function startScheduler(db: AppDb) {
+  stopScheduler()
+  _schedulerDb = db
+
   const rows = await db
     .select()
     .from(settings)
@@ -100,15 +103,16 @@ export function stopScheduler() {
   if (schedulerTimer) {
     clearInterval(schedulerTimer)
     schedulerTimer = null
+    _schedulerDb = null
     console.log('[x-sync] Scheduler stopped')
   }
 }
 
 async function runScheduledSync() {
-  if (syncing) return
+  if (syncing || !_schedulerDb) return
+  const db = _schedulerDb
 
   try {
-    const db = getDb()
     const [authRows, ct0Rows] = await Promise.all([
       db.select().from(settings).where(eq(settings.key, 'x_auth_token')).limit(1),
       db.select().from(settings).where(eq(settings.key, 'x_ct0')).limit(1),
@@ -120,7 +124,7 @@ async function runScheduledSync() {
     }
 
     console.log(`[x-sync] Running scheduled sync at ${new Date().toISOString()}`)
-    const result = await syncBookmarks(authRows[0].value, ct0Rows[0].value)
+    const result = await syncBookmarks(db, authRows[0].value, ct0Rows[0].value)
     console.log(`[x-sync] Sync complete: ${result.imported} imported, ${result.skipped} skipped`)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

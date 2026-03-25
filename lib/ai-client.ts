@@ -3,6 +3,7 @@ import OpenAI from 'openai'
 import { resolveAnthropicClient } from './claude-cli-auth'
 import { resolveOpenAIClient } from './openai-auth'
 import { getProvider } from './settings'
+import type { AppDb } from './db'
 
 export interface AIContentBlock {
   type: 'text' | 'image'
@@ -100,16 +101,33 @@ export class OpenAIAIClient implements AIClient {
 }
 
 export async function resolveAIClient(options: {
+  db: AppDb
   overrideKey?: string
   dbKey?: string
-} = {}): Promise<AIClient> {
-  const provider = await getProvider()
+  env?: {
+    ANTHROPIC_API_KEY?: string
+    OPENAI_API_KEY?: string
+    ANTHROPIC_BASE_URL?: string
+    OPENAI_BASE_URL?: string
+  }
+}): Promise<AIClient> {
+  const provider = await getProvider(options.db)
 
   if (provider === 'openai') {
-    const client = resolveOpenAIClient(options)
+    const client = resolveOpenAIClient({
+      overrideKey: options.overrideKey,
+      dbKey: options.dbKey,
+      envApiKey: options.env?.OPENAI_API_KEY,
+      envBaseURL: options.env?.OPENAI_BASE_URL,
+    })
     return new OpenAIAIClient(client)
   }
 
-  const client = resolveAnthropicClient(options)
+  const client = resolveAnthropicClient({
+    overrideKey: options.overrideKey,
+    dbKey: options.dbKey,
+    envApiKey: options.env?.ANTHROPIC_API_KEY,
+    envBaseURL: options.env?.ANTHROPIC_BASE_URL,
+  })
   return new AnthropicAIClient(client)
 }
